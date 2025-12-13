@@ -1,0 +1,13 @@
+clusters:
+  # EKS cluster (public OIDC endpoint)
+  eks-prod:
+    issuer: "https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE"
+
+  # GKE cluster (public OIDC endpoint)
+  gke-prod:
+    issuer: "https://container.googleapis.com/v1/projects/my-project/locations/us-central1/clusters/my-cluster"
+
+  # Self-hosted cluster with private CA
+  on-prem:
+    issuer: "https://kubernetes.internal.corp"
+    ca_cert: "/etc/multi-k8s-auth/certs/on-prem-ca.crt"

@@ -1,0 +1,26 @@
+apiVersion: skaffold/v4beta7
+kind: Config
+metadata:
+  name: multi-k8s-auth
+
+build:
+  local:
+    push: false
+    useBuildkit: true
+  artifacts:
+  - image: multi-k8s-auth
+    docker:
+      dockerfile: Dockerfile
+
+deploy:
+  kubeContext: minikube
+  kubectl: {}
+
+manifests:
+  rawYaml:
+  - k8s/namespace.yaml
+  - k8s/serviceaccount.yaml
+  - k8s/configmap.yaml
+  - k8s/deployment.yaml
+  - k8s/service.yaml
+  - k8s/test-client.yaml

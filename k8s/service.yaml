@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-k8s-auth
+  namespace: multi-k8s-auth
+spec:
+  selector:
+    app: multi-k8s-auth
+  ports:
+  - port: 80
+    targetPort: 8080

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-k8s-auth
+  namespace: multi-k8s-auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: multi-k8s-auth
+  template:
+    metadata:
+      labels:
+        app: multi-k8s-auth
+    spec:
+      serviceAccountName: multi-k8s-auth
+      containers:
+      - name: multi-k8s-auth
+        image: multi-k8s-auth
+        ports:
+        - containerPort: 8080
+        args:
+        - --config=/etc/multi-k8s-auth/clusters.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/multi-k8s-auth
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: multi-k8s-auth-config

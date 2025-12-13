@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: multi-k8s-auth-config
+  namespace: multi-k8s-auth
+data:
+  clusters.yaml: |
+    clusters:
+      minikube:
+        issuer: "https://kubernetes.default.svc.cluster.local"
+        ca_cert: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+        token_path: "/var/run/secrets/kubernetes.io/serviceaccount/token"
