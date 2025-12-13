@@ -4,26 +4,41 @@ metadata:
   name: test-client
   namespace: multi-k8s-auth
 ---
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: test-client
   namespace: multi-k8s-auth
 spec:
-  serviceAccountName: test-client
-  containers:
-  - name: curl
-    image: curlimages/curl:latest
-    command: ["sleep", "infinity"]
-    volumeMounts:
-    - name: sa-token
-      mountPath: /var/run/secrets/tokens
-      readOnly: true
-  volumes:
-  - name: sa-token
-    projected:
-      sources:
-      - serviceAccountToken:
-          path: token
-          expirationSeconds: 600
-          audience: test-audience
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-client
+  template:
+    metadata:
+      labels:
+        app: test-client
+    spec:
+      serviceAccountName: test-client
+      containers:
+      - name: test
+        image: multi-k8s-auth-test
+        env:
+        - name: E2E_TEST
+          value: "true"
+        - name: SERVICE_URL
+          value: "http://multi-k8s-auth"
+        - name: TOKEN_PATH
+          value: "/var/run/secrets/tokens/token"
+        volumeMounts:
+        - name: sa-token
+          mountPath: /var/run/secrets/tokens
+          readOnly: true
+      volumes:
+      - name: sa-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 600
+              audience: test-audience

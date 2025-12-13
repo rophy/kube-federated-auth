@@ -11,6 +11,9 @@ build:
   - image: multi-k8s-auth
     docker:
       dockerfile: Dockerfile
+  - image: multi-k8s-auth-test
+    docker:
+      dockerfile: Dockerfile.test
 
 deploy:
   kubeContext: minikube
