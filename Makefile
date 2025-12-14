@@ -2,7 +2,7 @@
 
 # Build Docker images
 build:
-	skaffold build
+	skaffold build -p cluster-a
 
 # Create kind clusters for multi-cluster testing
 kind:
