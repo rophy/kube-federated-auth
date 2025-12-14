@@ -135,27 +135,16 @@ multi-k8s-auth needs credentials to access remote cluster OIDC endpoints (for JW
    │ Configures multi-k8s-auth with bootstrap credentials       │
    └─────────────────────────────────────────────────────────────┘
 
-2. Agent Registration (automated):
+2. Agent Refresh (automated, periodic):
    ┌──────────────────┐                    ┌──────────────────┐
    │ multi-k8s-auth   │◀── POST /register ─│ agent (cluster-b)│
    │ (cluster-a)      │    + SA token      │                  │
-   │                  │    + fresh creds   │                  │
+   │                  │    + CA cert       │ runs periodically│
    │                  │                    │                  │
-   │ validates agent  │                    │                  │
-   │ token using      │                    │                  │
-   │ bootstrap creds  │                    │                  │
-   └──────────────────┘                    └──────────────────┘
-
-3. Credential Refresh (automated, continuous):
-   ┌──────────────────┐                    ┌──────────────────┐
-   │ multi-k8s-auth   │◀── POST /register ─│ agent (cluster-b)│
-   │                  │    (every hour)    │                  │
-   │ validates using  │                    │ generates fresh  │
-   │ current creds    │                    │ token locally    │
-   │                  │                    │                  │
-   │ updates K8s      │                    │                  │
-   │ Secret for       │                    │                  │
-   │ persistence      │                    │                  │
+   │ validates agent, │                    │                  │
+   │ stores creds,    │                    │                  │
+   │ persists to      │                    │                  │
+   │ K8s Secret       │                    │                  │
    └──────────────────┘                    └──────────────────┘
 ```
 
@@ -249,11 +238,9 @@ curl -H "Authorization: Bearer $(cat /var/run/secrets/tokens/token)" https://ser
 
 ## Roadmap / Future Work
 
-* `multi-k8s-auth-agent` implementation for automated credential refresh
 * mTLS integration for transport security
 * SDK / library for easy token verification in multiple languages
 * Example integrations with databases and HTTP services
-* Helm chart for easy deployment
 
 ---
 
