@@ -26,7 +26,7 @@ test-unit:
 # Run e2e tests in cluster-a
 test-e2e:
 	@echo "Running e2e tests in cluster-a..."
-	kubectl --context kind-cluster-a exec -n multi-k8s-auth deployment/test-client -- go test -v ./test/e2e/...
+	kubectl --context kind-cluster-a exec -n kube-federated-auth deployment/test-client -- go test -v ./test/e2e/...
 
 # Run all tests
 test: test-unit test-e2e
@@ -41,7 +41,7 @@ destroy:
 	@kubectl config use-context kind-cluster-a 2>/dev/null && skaffold delete || echo "Cluster-a not found or already cleaned"
 	@echo ""
 	@echo "Removing deployments from cluster-b..."
-	@kubectl config use-context kind-cluster-b 2>/dev/null && kubectl delete namespace multi-k8s-auth --ignore-not-found || echo "Cluster-b not found or already cleaned"
+	@kubectl config use-context kind-cluster-b 2>/dev/null && kubectl delete namespace kube-federated-auth --ignore-not-found || echo "Cluster-b not found or already cleaned"
 	@echo ""
 	@echo "Deleting kind clusters..."
 	@kind delete cluster --name cluster-a 2>/dev/null || echo "Cluster-a already deleted"
@@ -55,7 +55,7 @@ clean:
 
 # Show help
 help:
-	@echo "multi-k8s-auth - Cross-Cluster Kubernetes Authentication"
+	@echo "kube-federated-auth - Cross-Cluster Kubernetes Authentication"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make build             - Build Docker images"
@@ -78,6 +78,6 @@ help:
 	@echo "  make deploy && make test"
 	@echo ""
 	@echo "Architecture:"
-	@echo "  - cluster-a: multi-k8s-auth service + test-client"
+	@echo "  - cluster-a: kube-federated-auth service + test-client"
 	@echo "  - cluster-b: provides OIDC endpoint for cross-cluster token validation"
 	@echo ""

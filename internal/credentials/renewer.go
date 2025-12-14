@@ -17,7 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/rophy/multi-k8s-auth/internal/config"
+	"github.com/rophy/kube-federated-auth/internal/config"
 )
 
 // VerifierInvalidator is an interface for invalidating cached verifiers

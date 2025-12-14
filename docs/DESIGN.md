@@ -1,4 +1,4 @@
-# multi-k8s-auth Design
+# kube-federated-auth Design
 
 ## Overview
 
@@ -11,7 +11,7 @@ cluster-a (service cluster)                 cluster-b (client cluster)
 ┌─────────────────────────────────────┐     ┌─────────────────────────────┐
 │                                     │     │                             │
 │  ┌──────────┐    ┌──────────────┐   │     │  ┌─────────┐                │
-│  │ db-svc   │───▶│multi-k8s-auth│   │     │  │ client  │                │
+│  │ db-svc   │───▶│kube-federated-auth│   │     │  │ client  │                │
 │  └──────────┘    └──────────────┘   │     │  └────┬────┘                │
 │       ▲                │            │     │       │                     │
 │       │                │ validates  │     │       │ connects with       │
@@ -28,7 +28,7 @@ cluster-a (service cluster)                 cluster-b (client cluster)
 │       └─────────────────────────────┼─────────────┘
 │                                     │
 │  ┌───────────────────────────────┐  │     ┌─────────────────────────────┐
-│  │ Secret: credentials           │  │     │ multi-k8s-auth-agent        │
+│  │ Secret: credentials           │  │     │ kube-federated-auth-agent        │
 │  │   cluster-b-token: <token>    │◀─┼─────│ (pushes fresh credentials)  │
 │  │   cluster-b-ca.crt: <cert>    │  │     │                             │
 │  └───────────────────────────────┘  │     └─────────────────────────────┘
@@ -37,15 +37,15 @@ cluster-a (service cluster)                 cluster-b (client cluster)
 ```
 
 **Assumptions:**
-- Services (e.g., db-svc) and multi-k8s-auth are co-located in the same cluster
+- Services (e.g., db-svc) and kube-federated-auth are co-located in the same cluster
 - Clients from any cluster connect to services with their SA tokens
-- Services delegate authentication to multi-k8s-auth
+- Services delegate authentication to kube-federated-auth
 
 ## Component Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     multi-k8s-auth                          │
+│                     kube-federated-auth                          │
 ├─────────────────────────────────────────────────────────────┤
 │  Config (YAML)                                              │
 │  ┌─────────────┬──────────────────────────────────────┐    │
@@ -186,7 +186,7 @@ clusters:
 
 ## Credential Lifecycle Management
 
-multi-k8s-auth needs credentials (token + CA cert) to access remote cluster OIDC endpoints for JWKS fetching. These credentials are managed via the agent pattern.
+kube-federated-auth needs credentials (token + CA cert) to access remote cluster OIDC endpoints for JWKS fetching. These credentials are managed via the agent pattern.
 
 ### Why Agent Pattern?
 
@@ -207,15 +207,15 @@ The agent pattern allows:
 Phase 1: Bootstrap (manual, one-time per cluster)
 ───────────────────────────────────────────────────
 Admin creates bootstrap token:
-  kubectl create token multi-k8s-auth-agent -n multi-k8s-auth --duration=168h
+  kubectl create token kube-federated-auth-agent -n kube-federated-auth --duration=168h
 
-Configure multi-k8s-auth with bootstrap credentials (TTL=7d)
+Configure kube-federated-auth with bootstrap credentials (TTL=7d)
 
 
 Phase 2: Agent Registration (automated)
 ───────────────────────────────────────────────────
 ┌──────────────────────┐                    ┌────────────────────────┐
-│  multi-k8s-auth      │                    │  agent (cluster-b)     │
+│  kube-federated-auth      │                    │  agent (cluster-b)     │
 │  (cluster-a)         │                    │                        │
 │                      │  POST /register    │                        │
 │                      │◀───────────────────│  Sends:                │
@@ -234,20 +234,20 @@ Phase 2: Agent Registration (automated)
 Phase 3: Continuous Refresh (automated)
 ───────────────────────────────────────────────────
 Agent calls POST /register every hour with fresh credentials.
-multi-k8s-auth validates using current credentials (not bootstrap).
+kube-federated-auth validates using current credentials (not bootstrap).
 Self-sustaining cycle - no long-lived credentials needed.
 ```
 
 ### Credential Persistence
 
-multi-k8s-auth persists credentials to a Kubernetes Secret (requires RBAC):
+kube-federated-auth persists credentials to a Kubernetes Secret (requires RBAC):
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: multi-k8s-auth-credentials
-  namespace: multi-k8s-auth
+  name: kube-federated-auth-credentials
+  namespace: kube-federated-auth
 type: Opaque
 data:
   cluster-b-token: <base64-encoded-token>
@@ -269,9 +269,9 @@ Only specific ServiceAccounts can register credentials:
 # Config: allowed agents per cluster
 agents:
   cluster-b:
-    serviceAccount: "system:serviceaccount:multi-k8s-auth:multi-k8s-auth-agent"
+    serviceAccount: "system:serviceaccount:kube-federated-auth:kube-federated-auth-agent"
   cluster-c:
-    serviceAccount: "system:serviceaccount:multi-k8s-auth:multi-k8s-auth-agent"
+    serviceAccount: "system:serviceaccount:kube-federated-auth:kube-federated-auth-agent"
 ```
 
 ### POST /register API
@@ -314,7 +314,7 @@ Authorization: Bearer <agent-sa-token>
 | Scenario | Behavior |
 |----------|----------|
 | Agent dies | Credentials expire, falls back to bootstrap, alerts |
-| multi-k8s-auth restarts | Reads from persisted Secret |
+| kube-federated-auth restarts | Reads from persisted Secret |
 | Bootstrap expires before agent connects | Manual intervention required |
 | Network partition | Agent retries, credentials eventually expire |
 
@@ -333,12 +333,12 @@ Authorization: Bearer <agent-sa-token>
 ## Project Structure
 
 ```
-multi-k8s-auth/
+kube-federated-auth/
 ├── cmd/
 │   ├── server/
-│   │   └── main.go                # multi-k8s-auth entry point
+│   │   └── main.go                # kube-federated-auth entry point
 │   └── agent/
-│       └── main.go                # multi-k8s-auth-agent entry point
+│       └── main.go                # kube-federated-auth-agent entry point
 ├── internal/
 │   ├── config/
 │   │   ├── config.go              # YAML config loading
@@ -372,7 +372,7 @@ multi-k8s-auth/
 │   └── cluster-b/                 # Client cluster manifests
 │       ├── namespace.yaml
 │       ├── serviceaccount.yaml    # For agent
-│       └── agent.yaml             # multi-k8s-auth-agent deployment
+│       └── agent.yaml             # kube-federated-auth-agent deployment
 ├── config/
 │   └── clusters.example.yaml
 ├── go.mod
@@ -428,7 +428,7 @@ make test-e2e
 ## Authentication Flow
 
 1. Client pod obtains projected ServiceAccount token with custom audience
-2. Client sends token to multi-k8s-auth with cluster name
+2. Client sends token to kube-federated-auth with cluster name
 3. Service looks up cluster configuration
 4. Service validates token using OIDC discovery and JWKS from issuer
 5. Service returns decoded claims with cluster name added

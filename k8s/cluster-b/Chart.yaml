@@ -1,4 +1,4 @@
 apiVersion: v2
-name: multi-k8s-auth-remote
-description: RBAC setup for multi-k8s-auth credential renewal in remote clusters
+name: kube-federated-auth-remote
+description: RBAC setup for kube-federated-auth credential renewal in remote clusters
 version: 1.0.0

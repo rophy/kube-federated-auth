@@ -9,16 +9,16 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rophy/multi-k8s-auth/internal/config"
-	"github.com/rophy/multi-k8s-auth/internal/credentials"
-	"github.com/rophy/multi-k8s-auth/internal/server"
+	"github.com/rophy/kube-federated-auth/internal/config"
+	"github.com/rophy/kube-federated-auth/internal/credentials"
+	"github.com/rophy/kube-federated-auth/internal/server"
 )
 
 func main() {
 	configPath := flag.String("config", getEnv("CONFIG_PATH", "config/clusters.yaml"), "path to cluster config file")
 	port := flag.String("port", getEnv("PORT", "8080"), "server port")
-	namespace := flag.String("namespace", getEnv("NAMESPACE", "multi-k8s-auth"), "namespace for credential secret")
-	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "multi-k8s-auth"), "name of credential secret")
+	namespace := flag.String("namespace", getEnv("NAMESPACE", "kube-federated-auth"), "namespace for credential secret")
+	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "kube-federated-auth"), "name of credential secret")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)

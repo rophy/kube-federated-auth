@@ -6,8 +6,8 @@ set -e
 
 CLUSTER_A="cluster-a"
 CLUSTER_B="cluster-b"
-NAMESPACE="multi-k8s-auth"
-SECRET_NAME="multi-k8s-auth"
+NAMESPACE="kube-federated-auth"
+SECRET_NAME="kube-federated-auth"
 
 echo "=========================================="
 echo "Configuring Multi-Cluster Authentication"
@@ -28,7 +28,7 @@ else
 
   # Create a bootstrap token from the reader service account
   echo "  Creating bootstrap token from cluster-b..."
-  TOKEN=$(kubectl --context=kind-${CLUSTER_B} --namespace=${NAMESPACE} create token multi-k8s-auth-reader --duration=168h)
+  TOKEN=$(kubectl --context=kind-${CLUSTER_B} --namespace=${NAMESPACE} create token kube-federated-auth-reader --duration=168h)
   echo "  ✅ Bootstrap token created (7 day TTL)"
 
   # Extract CA certificate

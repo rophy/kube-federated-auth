@@ -1,8 +1,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: multi-k8s-auth
-  namespace: multi-k8s-auth
+  name: kube-federated-auth
+  namespace: kube-federated-auth
 data:
   clusters.yaml: |
     clusters:
@@ -16,6 +16,6 @@ data:
       cluster-b:
         issuer: {{ .Values.cluster_b.issuer | quote }}
         api_server: {{ .Values.cluster_b.api_server | quote }}
-        ca_cert: "/etc/multi-k8s-auth/certs/cluster-b-ca.crt"
-        token_path: "/etc/multi-k8s-auth/certs/cluster-b-token"
+        ca_cert: "/etc/kube-federated-auth/certs/cluster-b-ca.crt"
+        token_path: "/etc/kube-federated-auth/certs/cluster-b-token"
 

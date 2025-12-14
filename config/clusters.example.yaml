@@ -16,11 +16,11 @@ clusters:
   # Self-hosted cluster with private CA
   on-prem:
     issuer: "https://kubernetes.internal.corp"
-    ca_cert: "/etc/multi-k8s-auth/certs/on-prem-ca.crt"
+    ca_cert: "/etc/kube-federated-auth/certs/on-prem-ca.crt"
 
   # Remote cluster - auto-renewed because api_server is set
   remote-cluster:
     issuer: "https://kubernetes.default.svc.cluster.local"
     api_server: "https://192.168.1.100:6443"
-    ca_cert: "/etc/multi-k8s-auth/certs/remote-ca.crt"
-    token_path: "/etc/multi-k8s-auth/certs/remote-token"
+    ca_cert: "/etc/kube-federated-auth/certs/remote-ca.crt"
+    token_path: "/etc/kube-federated-auth/certs/remote-token"

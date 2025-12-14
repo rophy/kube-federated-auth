@@ -1,8 +1,8 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: multi-k8s-auth
-  namespace: multi-k8s-auth
+  name: kube-federated-auth
+  namespace: kube-federated-auth
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
@@ -11,13 +11,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: multi-k8s-auth
-  namespace: multi-k8s-auth
+  name: kube-federated-auth
+  namespace: kube-federated-auth
 subjects:
 - kind: ServiceAccount
-  name: multi-k8s-auth
-  namespace: multi-k8s-auth
+  name: kube-federated-auth
+  namespace: kube-federated-auth
 roleRef:
   kind: Role
-  name: multi-k8s-auth
+  name: kube-federated-auth
   apiGroup: rbac.authorization.k8s.io

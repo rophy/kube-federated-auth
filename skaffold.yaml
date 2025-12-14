@@ -1,7 +1,7 @@
 apiVersion: skaffold/v4beta7
 kind: Config
 metadata:
-  name: multi-k8s-auth
+  name: kube-federated-auth
 
 profiles:
 - name: cluster-a
@@ -10,19 +10,19 @@ profiles:
       push: false
       useBuildkit: true
     artifacts:
-    - image: multi-k8s-auth
+    - image: kube-federated-auth
       docker:
         dockerfile: Dockerfile
-    - image: multi-k8s-auth-test
+    - image: kube-federated-auth-test
       docker:
         dockerfile: Dockerfile.test
   deploy:
     kubeContext: kind-cluster-a
     helm:
       releases:
-      - name: multi-k8s-auth
+      - name: kube-federated-auth
         createNamespace: true
-        namespace: multi-k8s-auth
+        namespace: kube-federated-auth
         chartPath: k8s/cluster-a
         setValueTemplates:
           cluster_b.api_server: https://{{.CLUSTER_B_IP}}:6443
@@ -32,8 +32,8 @@ profiles:
     kubeContext: kind-cluster-b
     helm:
       releases:
-      - name: multi-k8s-auth-remote
+      - name: kube-federated-auth-remote
         createNamespace: true
-        namespace: multi-k8s-auth
+        namespace: kube-federated-auth
         chartPath: k8s/cluster-b
 

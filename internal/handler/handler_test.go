@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rophy/multi-k8s-auth/internal/config"
+	"github.com/rophy/kube-federated-auth/internal/config"
 )
 
 func TestHealth(t *testing.T) {

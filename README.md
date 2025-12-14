@@ -1,4 +1,4 @@
-# multi-k8s-auth
+# kube-federated-auth
 
 **Authenticate workloads across multiple Kubernetes clusters using OIDC-compliant ServiceAccount tokens with explicit issuer trust.**
 
@@ -6,7 +6,7 @@
 
 ## Overview
 
-`multi-k8s-auth` enables secure, cross-cluster workload authentication for Kubernetes services. Workloads running in one cluster can authenticate to services in another cluster using **ServiceAccount JWTs**, without requiring additional secrets or control planes.
+`kube-federated-auth` enables secure, cross-cluster workload authentication for Kubernetes services. Workloads running in one cluster can authenticate to services in another cluster using **ServiceAccount JWTs**, without requiring additional secrets or control planes.
 
 Key benefits:
 - Cross-cluster authentication
@@ -24,7 +24,7 @@ cluster-a (service cluster)              cluster-b (client cluster)
 ┌────────────────────────────────────┐   ┌─────────────────────────────────┐
 │                                    │   │                                 │
 │  ┌──────────┐    ┌──────────────┐  │   │  ┌─────────┐                    │
-│  │ db-svc   │───▶│multi-k8s-auth│  │   │  │ client  │ (has SA token)     │
+│  │ db-svc   │───▶│kube-federated-auth│  │   │  │ client  │ (has SA token)     │
 │  └──────────┘    └──────────────┘  │   │  └────┬────┘                    │
 │       ▲                │           │   │       │                         │
 │       │                │ validates │   │       │ connects to db-svc      │
@@ -43,7 +43,7 @@ cluster-a (service cluster)              cluster-b (client cluster)
 │       └────────────────────────────┼───────────┘
 │                                    │
 │  ┌──────────────────────────────┐  │   ┌─────────────────────────────────┐
-│  │ Secret: credentials          │  │   │  multi-k8s-auth-agent           │
+│  │ Secret: credentials          │  │   │  kube-federated-auth-agent           │
 │  │   cluster-b-token: <token>   │◀─┼───│  (pushes fresh credentials)     │
 │  │   cluster-b-ca.crt: <cert>   │  │   │                                 │
 │  └──────────────────────────────┘  │   └─────────────────────────────────┘
@@ -52,14 +52,14 @@ cluster-a (service cluster)              cluster-b (client cluster)
 ```
 
 **Components:**
-- **multi-k8s-auth**: Token validation service, co-located with services needing authentication
-- **multi-k8s-auth-agent**: Deployed in remote clusters, pushes fresh credentials to multi-k8s-auth
-- **db-svc**: Example service (e.g., database) that delegates authentication to multi-k8s-auth
+- **kube-federated-auth**: Token validation service, co-located with services needing authentication
+- **kube-federated-auth-agent**: Deployed in remote clusters, pushes fresh credentials to kube-federated-auth
+- **db-svc**: Example service (e.g., database) that delegates authentication to kube-federated-auth
 
 **Assumptions:**
-- Services (db-svc) and multi-k8s-auth are deployed in the same cluster
+- Services (db-svc) and kube-federated-auth are deployed in the same cluster
 - Clients from any cluster connect to services, authenticating with their SA tokens
-- multi-k8s-auth validates tokens from all configured clusters
+- kube-federated-auth validates tokens from all configured clusters
 
 ---
 
@@ -77,7 +77,7 @@ cluster-a (service cluster)              cluster-b (client cluster)
 
 Kubernetes ServiceAccounts provide a strong local identity mechanism. However, there is **no built-in cross-cluster authentication**. Existing solutions like SPIFFE or Istio provide robust identity federation but come with significant operational complexity.
 
-`multi-k8s-auth` leverages:
+`kube-federated-auth` leverages:
 - **Kubernetes as OIDC Identity Provider**
 - **ServiceAccount projected JWTs**
 - **Explicit trust per cluster**
@@ -111,19 +111,19 @@ This approach allows cross-cluster workload authentication **without introducing
 
 1. **Client workload** obtains a projected ServiceAccount token.
 2. **Client** sends the token to the target service over TLS.
-3. **Service** calls multi-k8s-auth `/validate` API with token + cluster name.
-4. **multi-k8s-auth** validates the JWT:
+3. **Service** calls kube-federated-auth `/validate` API with token + cluster name.
+4. **kube-federated-auth** validates the JWT:
    - Verifies signature against issuer JWKS
    - Checks `iss` claim matches configured issuer
    - Ensures token is not expired
-5. **multi-k8s-auth** returns validated claims to service.
+5. **kube-federated-auth** returns validated claims to service.
 6. **Service** applies authorization based on claims.
 
 ---
 
 ## Credential Lifecycle Management
 
-multi-k8s-auth needs credentials to access remote cluster OIDC endpoints (for JWKS). These credentials are managed automatically via the agent pattern.
+kube-federated-auth needs credentials to access remote cluster OIDC endpoints (for JWKS). These credentials are managed automatically via the agent pattern.
 
 ### Credential Flow
 
@@ -131,13 +131,13 @@ multi-k8s-auth needs credentials to access remote cluster OIDC endpoints (for JW
 1. Bootstrap (manual, one-time):
    ┌─────────────────────────────────────────────────────────────┐
    │ Admin creates bootstrap token for cluster-b (TTL=7d)       │
-   │ kubectl create token multi-k8s-auth-agent --duration=168h  │
-   │ Configures multi-k8s-auth with bootstrap credentials       │
+   │ kubectl create token kube-federated-auth-agent --duration=168h  │
+   │ Configures kube-federated-auth with bootstrap credentials       │
    └─────────────────────────────────────────────────────────────┘
 
 2. Agent Refresh (automated, periodic):
    ┌──────────────────┐                    ┌──────────────────┐
-   │ multi-k8s-auth   │◀── POST /register ─│ agent (cluster-b)│
+   │ kube-federated-auth   │◀── POST /register ─│ agent (cluster-b)│
    │ (cluster-a)      │    + SA token      │                  │
    │                  │    + CA cert       │ runs periodically│
    │                  │                    │                  │
@@ -150,14 +150,14 @@ multi-k8s-auth needs credentials to access remote cluster OIDC endpoints (for JW
 
 ### Credential Persistence
 
-multi-k8s-auth persists credentials to a Kubernetes Secret:
+kube-federated-auth persists credentials to a Kubernetes Secret:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: multi-k8s-auth-credentials
-  namespace: multi-k8s-auth
+  name: kube-federated-auth-credentials
+  namespace: kube-federated-auth
 type: Opaque
 data:
   cluster-b-token: <base64>
@@ -176,7 +176,7 @@ Not any token from a remote cluster can push credentials. The agent must authent
 ```yaml
 # Only this identity can register credentials
 allowedAgents:
-  cluster-b: "system:serviceaccount:multi-k8s-auth:multi-k8s-auth-agent"
+  cluster-b: "system:serviceaccount:kube-federated-auth:kube-federated-auth-agent"
 ```
 
 ---
@@ -233,8 +233,8 @@ curl -H "Authorization: Bearer $(cat /var/run/secrets/tokens/token)" https://ser
 
 | Component | Description | Deployment |
 |-----------|-------------|------------|
-| `multi-k8s-auth` | Token validation service | Service cluster |
-| `multi-k8s-auth-agent` | Credential refresh agent | Each remote cluster |
+| `kube-federated-auth` | Token validation service | Service cluster |
+| `kube-federated-auth-agent` | Credential refresh agent | Each remote cluster |
 
 ## Roadmap / Future Work
 

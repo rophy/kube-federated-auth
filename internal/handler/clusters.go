@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rophy/multi-k8s-auth/internal/config"
-	"github.com/rophy/multi-k8s-auth/internal/credentials"
+	"github.com/rophy/kube-federated-auth/internal/config"
+	"github.com/rophy/kube-federated-auth/internal/credentials"
 )
 
 type ClusterInfo struct {

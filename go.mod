@@ -1,4 +1,4 @@
-module github.com/rophy/multi-k8s-auth
+module github.com/rophy/kube-federated-auth
 
 go 1.24.0
 

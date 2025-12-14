@@ -1,33 +1,33 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: multi-k8s-auth
-  namespace: multi-k8s-auth
+  name: kube-federated-auth
+  namespace: kube-federated-auth
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: multi-k8s-auth
+      app: kube-federated-auth
   template:
     metadata:
       labels:
-        app: multi-k8s-auth
+        app: kube-federated-auth
     spec:
-      serviceAccountName: multi-k8s-auth
+      serviceAccountName: kube-federated-auth
       containers:
-      - name: multi-k8s-auth
-        image: multi-k8s-auth
+      - name: kube-federated-auth
+        image: kube-federated-auth
         ports:
         - containerPort: 8080
         env:
         - name: CONFIG_PATH
-          value: /etc/multi-k8s-auth/clusters.yaml
+          value: /etc/kube-federated-auth/clusters.yaml
         volumeMounts:
         - name: config
-          mountPath: /etc/multi-k8s-auth
+          mountPath: /etc/kube-federated-auth
           readOnly: true
         - name: cluster-certs
-          mountPath: /etc/multi-k8s-auth/certs
+          mountPath: /etc/kube-federated-auth/certs
           readOnly: true
         livenessProbe:
           httpGet:
@@ -44,8 +44,8 @@ spec:
       volumes:
       - name: config
         configMap:
-          name: multi-k8s-auth
+          name: kube-federated-auth
       - name: cluster-certs
         secret:
-          secretName: multi-k8s-auth
+          secretName: kube-federated-auth
           optional: true

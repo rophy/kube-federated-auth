@@ -5,10 +5,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/rophy/multi-k8s-auth/internal/config"
-	"github.com/rophy/multi-k8s-auth/internal/credentials"
-	"github.com/rophy/multi-k8s-auth/internal/handler"
-	"github.com/rophy/multi-k8s-auth/internal/oidc"
+	"github.com/rophy/kube-federated-auth/internal/config"
+	"github.com/rophy/kube-federated-auth/internal/credentials"
+	"github.com/rophy/kube-federated-auth/internal/handler"
+	"github.com/rophy/kube-federated-auth/internal/oidc"
 )
 
 // Server holds the HTTP handler and verifier manager

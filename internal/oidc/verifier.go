@@ -13,8 +13,8 @@ import (
 	"sync"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/rophy/multi-k8s-auth/internal/config"
-	"github.com/rophy/multi-k8s-auth/internal/credentials"
+	"github.com/rophy/kube-federated-auth/internal/config"
+	"github.com/rophy/kube-federated-auth/internal/credentials"
 )
 
 type Claims struct {

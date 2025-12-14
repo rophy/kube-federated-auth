@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/rophy/multi-k8s-auth/internal/oidc"
+	"github.com/rophy/kube-federated-auth/internal/oidc"
 )
 
 type ValidateRequest struct {

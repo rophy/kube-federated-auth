@@ -2,13 +2,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: test-client
-  namespace: multi-k8s-auth
+  namespace: kube-federated-auth
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-client
-  namespace: multi-k8s-auth
+  namespace: kube-federated-auth
 spec:
   replicas: 1
   selector:
@@ -22,13 +22,13 @@ spec:
       serviceAccountName: test-client
       containers:
       - name: test
-        image: multi-k8s-auth-test:latest
+        image: kube-federated-auth-test:latest
         imagePullPolicy: IfNotPresent
         env:
         - name: E2E_TEST
           value: "true"
         - name: SERVICE_URL
-          value: "http://multi-k8s-auth"
+          value: "http://kube-federated-auth"
         - name: TOKEN_PATH
           value: "/var/run/secrets/tokens/token"
         - name: CLUSTER_NAME
