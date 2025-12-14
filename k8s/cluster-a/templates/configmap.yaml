@@ -12,16 +12,10 @@ data:
         ca_cert: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
         token_path: "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
-      # Remote cluster (cluster-b)
+      # Remote cluster (cluster-b) - auto-renewed
       cluster-b:
         issuer: {{ .Values.cluster_b.issuer | quote }}
         api_server: {{ .Values.cluster_b.api_server | quote }}
         ca_cert: "/etc/multi-k8s-auth/certs/cluster-b-ca.crt"
         token_path: "/etc/multi-k8s-auth/certs/cluster-b-token"
-        renewal:
-          enabled: true
-          service_account: "multi-k8s-auth-reader"
-          namespace: "multi-k8s-auth"
-          interval: "30m"
-          token_duration: "1h"
 

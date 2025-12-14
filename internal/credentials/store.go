@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -105,23 +106,19 @@ func (s *Store) loadFromSecret(ctx context.Context) error {
 	defer s.mu.Unlock()
 
 	// Parse credentials from secret data
-	// Format: cluster-{name}-token, cluster-{name}-ca.crt
+	// Format: {name}-token, {name}-ca.crt
 	clusters := make(map[string]bool)
 	for key := range secret.Data {
-		if len(key) > 8 && key[:8] == "cluster-" {
-			// Extract cluster name from key
-			suffix := key[8:]
-			if len(suffix) > 6 && suffix[len(suffix)-6:] == "-token" {
-				clusters[suffix[:len(suffix)-6]] = true
-			} else if len(suffix) > 7 && suffix[len(suffix)-7:] == "-ca.crt" {
-				clusters[suffix[:len(suffix)-7]] = true
-			}
+		if strings.HasSuffix(key, "-token") {
+			clusters[strings.TrimSuffix(key, "-token")] = true
+		} else if strings.HasSuffix(key, "-ca.crt") {
+			clusters[strings.TrimSuffix(key, "-ca.crt")] = true
 		}
 	}
 
 	for cluster := range clusters {
-		tokenKey := fmt.Sprintf("cluster-%s-token", cluster)
-		caKey := fmt.Sprintf("cluster-%s-ca.crt", cluster)
+		tokenKey := fmt.Sprintf("%s-token", cluster)
+		caKey := fmt.Sprintf("%s-ca.crt", cluster)
 
 		token, hasToken := secret.Data[tokenKey]
 		ca, hasCA := secret.Data[caKey]
@@ -147,8 +144,8 @@ func (s *Store) saveToSecret(ctx context.Context) error {
 	s.mu.RLock()
 	data := make(map[string][]byte)
 	for cluster, creds := range s.credentials {
-		data[fmt.Sprintf("cluster-%s-token", cluster)] = []byte(creds.Token)
-		data[fmt.Sprintf("cluster-%s-ca.crt", cluster)] = creds.CACert
+		data[fmt.Sprintf("%s-token", cluster)] = []byte(creds.Token)
+		data[fmt.Sprintf("%s-ca.crt", cluster)] = creds.CACert
 	}
 	s.mu.RUnlock()
 

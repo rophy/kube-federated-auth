@@ -8,31 +8,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type RenewalConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	ServiceAccount string        `yaml:"service_account"`
-	Namespace      string        `yaml:"namespace"`
-	Interval       time.Duration `yaml:"interval"`
-	TokenDuration  time.Duration `yaml:"token_duration"`
+const (
+	DefaultRenewalInterval      = 1 * time.Hour
+	DefaultRenewalTokenDuration = 24 * time.Hour
+)
+
+// RenewalSettings contains global settings for token renewal
+type RenewalSettings struct {
+	Interval      time.Duration `yaml:"interval"`
+	TokenDuration time.Duration `yaml:"token_duration"`
 }
 
 // UnmarshalYAML handles duration parsing from string
-func (r *RenewalConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	type rawRenewalConfig struct {
-		Enabled        bool   `yaml:"enabled"`
-		ServiceAccount string `yaml:"service_account"`
-		Namespace      string `yaml:"namespace"`
-		Interval       string `yaml:"interval"`
-		TokenDuration  string `yaml:"token_duration"`
+func (r *RenewalSettings) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type rawRenewalSettings struct {
+		Interval      string `yaml:"interval"`
+		TokenDuration string `yaml:"token_duration"`
 	}
-	var raw rawRenewalConfig
+	var raw rawRenewalSettings
 	if err := unmarshal(&raw); err != nil {
 		return err
 	}
-
-	r.Enabled = raw.Enabled
-	r.ServiceAccount = raw.ServiceAccount
-	r.Namespace = raw.Namespace
 
 	if raw.Interval != "" {
 		d, err := time.ParseDuration(raw.Interval)
@@ -40,8 +36,6 @@ func (r *RenewalConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 			return fmt.Errorf("parsing interval: %w", err)
 		}
 		r.Interval = d
-	} else {
-		r.Interval = 30 * time.Minute // default
 	}
 
 	if raw.TokenDuration != "" {
@@ -50,19 +44,16 @@ func (r *RenewalConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 			return fmt.Errorf("parsing token_duration: %w", err)
 		}
 		r.TokenDuration = d
-	} else {
-		r.TokenDuration = 1 * time.Hour // default
 	}
 
 	return nil
 }
 
 type ClusterConfig struct {
-	Issuer    string         `yaml:"issuer"`
-	APIServer string         `yaml:"api_server,omitempty"` // Override URL for OIDC discovery
-	CACert    string         `yaml:"ca_cert,omitempty"`
-	TokenPath string         `yaml:"token_path,omitempty"`
-	Renewal   *RenewalConfig `yaml:"renewal,omitempty"`
+	Issuer    string `yaml:"issuer"`
+	APIServer string `yaml:"api_server,omitempty"` // Override URL for OIDC discovery
+	CACert    string `yaml:"ca_cert,omitempty"`
+	TokenPath string `yaml:"token_path,omitempty"`
 }
 
 // DiscoveryURL returns the URL to use for OIDC discovery.
@@ -74,8 +65,30 @@ func (c *ClusterConfig) DiscoveryURL() string {
 	return c.Issuer
 }
 
+// IsRemote returns true if this cluster requires remote access (has api_server set)
+func (c *ClusterConfig) IsRemote() bool {
+	return c.APIServer != ""
+}
+
 type Config struct {
+	Renewal  *RenewalSettings          `yaml:"renewal,omitempty"`
 	Clusters map[string]ClusterConfig `yaml:"clusters"`
+}
+
+// GetRenewalInterval returns the configured renewal interval or default
+func (c *Config) GetRenewalInterval() time.Duration {
+	if c.Renewal != nil && c.Renewal.Interval > 0 {
+		return c.Renewal.Interval
+	}
+	return DefaultRenewalInterval
+}
+
+// GetRenewalTokenDuration returns the configured token duration or default
+func (c *Config) GetRenewalTokenDuration() time.Duration {
+	if c.Renewal != nil && c.Renewal.TokenDuration > 0 {
+		return c.Renewal.TokenDuration
+	}
+	return DefaultRenewalTokenDuration
 }
 
 func Load(path string) (*Config, error) {
@@ -110,11 +123,11 @@ func (c *Config) ClusterNames() []string {
 	return names
 }
 
-// GetRenewalClusters returns cluster names that have renewal enabled
-func (c *Config) GetRenewalClusters() []string {
+// GetRemoteClusters returns cluster names that are remote (have api_server set)
+func (c *Config) GetRemoteClusters() []string {
 	var names []string
 	for name, cfg := range c.Clusters {
-		if cfg.Renewal != nil && cfg.Renewal.Enabled {
+		if cfg.IsRemote() {
 			names = append(names, name)
 		}
 	}

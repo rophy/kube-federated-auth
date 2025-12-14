@@ -44,10 +44,10 @@ func main() {
 
 	srv := server.New(cfg, credStore)
 
-	// Start credential renewal if any clusters have renewal enabled
-	renewalClusters := cfg.GetRenewalClusters()
-	if len(renewalClusters) > 0 {
-		log.Printf("Starting credential renewal for clusters: %v", renewalClusters)
+	// Start credential renewal for remote clusters
+	remoteClusters := cfg.GetRemoteClusters()
+	if len(remoteClusters) > 0 {
+		log.Printf("Starting credential renewal for remote clusters: %v", remoteClusters)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 

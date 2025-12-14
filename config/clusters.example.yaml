@@ -1,3 +1,8 @@
+# Global renewal settings (optional, uses defaults if not specified)
+renewal:
+  interval: "1h"        # How often to renew tokens (default: 1h)
+  token_duration: "24h" # Requested token TTL (default: 24h)
+
 clusters:
   # EKS cluster (public OIDC endpoint)
   eks-prod:
@@ -12,15 +17,9 @@ clusters:
     issuer: "https://kubernetes.internal.corp"
     ca_cert: "/etc/multi-k8s-auth/certs/on-prem-ca.crt"
 
-  # Remote cluster with automatic credential renewal
+  # Remote cluster - auto-renewed because api_server is set
   remote-cluster:
     issuer: "https://kubernetes.default.svc.cluster.local"
     api_server: "https://192.168.1.100:6443"
     ca_cert: "/etc/multi-k8s-auth/certs/remote-ca.crt"
     token_path: "/etc/multi-k8s-auth/certs/remote-token"
-    renewal:
-      enabled: true
-      service_account: "multi-k8s-auth-reader"
-      namespace: "multi-k8s-auth"
-      interval: "30m"
-      token_duration: "1h"

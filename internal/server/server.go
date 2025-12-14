@@ -27,7 +27,7 @@ func New(cfg *config.Config, credStore *credentials.Store) *Server {
 	verifier := oidc.NewVerifierManager(cfg, credStore)
 
 	r.Get("/health", handler.Health)
-	r.Get("/clusters", handler.NewClustersHandler(cfg).ServeHTTP)
+	r.Get("/clusters", handler.NewClustersHandler(cfg, credStore).ServeHTTP)
 	r.Post("/validate", handler.NewValidateHandler(verifier).ServeHTTP)
 
 	return &Server{

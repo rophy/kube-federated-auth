@@ -114,8 +114,11 @@ clusters:
 	}
 }
 
-func TestLoad_WithRenewalConfig(t *testing.T) {
+func TestLoad_WithGlobalRenewalSettings(t *testing.T) {
 	content := `
+renewal:
+  interval: "2h"
+  token_duration: "48h"
 clusters:
   cluster-a:
     issuer: "https://oidc.example.com"
@@ -124,12 +127,6 @@ clusters:
     api_server: "https://192.168.1.100:6443"
     ca_cert: "/path/to/ca.crt"
     token_path: "/path/to/token"
-    renewal:
-      enabled: true
-      service_account: "multi-k8s-auth-reader"
-      namespace: "multi-k8s-auth"
-      interval: "30m"
-      token_duration: "1h"
 `
 	cfg := loadFromString(t, content)
 
@@ -137,58 +134,62 @@ clusters:
 		t.Errorf("expected 2 clusters, got %d", len(cfg.Clusters))
 	}
 
-	b, ok := cfg.Clusters["cluster-b"]
-	if !ok {
-		t.Fatal("cluster-b not found")
+	// Test global renewal settings
+	if cfg.GetRenewalInterval().Hours() != 2 {
+		t.Errorf("interval = %v, want 2h", cfg.GetRenewalInterval())
+	}
+	if cfg.GetRenewalTokenDuration().Hours() != 48 {
+		t.Errorf("token_duration = %v, want 48h", cfg.GetRenewalTokenDuration())
 	}
 
-	if b.Renewal == nil {
-		t.Fatal("cluster-b renewal config is nil")
+	// Test IsRemote
+	a := cfg.Clusters["cluster-a"]
+	if a.IsRemote() {
+		t.Error("cluster-a should not be remote")
 	}
 
-	if !b.Renewal.Enabled {
-		t.Error("expected renewal to be enabled")
-	}
-	if b.Renewal.ServiceAccount != "multi-k8s-auth-reader" {
-		t.Errorf("service_account = %q, want %q", b.Renewal.ServiceAccount, "multi-k8s-auth-reader")
-	}
-	if b.Renewal.Namespace != "multi-k8s-auth" {
-		t.Errorf("namespace = %q, want %q", b.Renewal.Namespace, "multi-k8s-auth")
-	}
-	if b.Renewal.Interval.Minutes() != 30 {
-		t.Errorf("interval = %v, want 30m", b.Renewal.Interval)
-	}
-	if b.Renewal.TokenDuration.Hours() != 1 {
-		t.Errorf("token_duration = %v, want 1h", b.Renewal.TokenDuration)
+	b := cfg.Clusters["cluster-b"]
+	if !b.IsRemote() {
+		t.Error("cluster-b should be remote")
 	}
 }
 
-func TestGetRenewalClusters(t *testing.T) {
+func TestGetRemoteClusters(t *testing.T) {
 	content := `
 clusters:
   cluster-a:
     issuer: "https://oidc.example.com"
   cluster-b:
     issuer: "https://oidc.other.com"
-    renewal:
-      enabled: true
-      service_account: "reader"
-      namespace: "default"
+    api_server: "https://192.168.1.100:6443"
   cluster-c:
     issuer: "https://oidc.third.com"
-    renewal:
-      enabled: false
-      service_account: "reader"
-      namespace: "default"
 `
 	cfg := loadFromString(t, content)
 
-	renewalClusters := cfg.GetRenewalClusters()
-	if len(renewalClusters) != 1 {
-		t.Errorf("expected 1 renewal cluster, got %d", len(renewalClusters))
+	remoteClusters := cfg.GetRemoteClusters()
+	if len(remoteClusters) != 1 {
+		t.Errorf("expected 1 remote cluster, got %d", len(remoteClusters))
 	}
-	if len(renewalClusters) > 0 && renewalClusters[0] != "cluster-b" {
-		t.Errorf("expected cluster-b, got %s", renewalClusters[0])
+	if len(remoteClusters) > 0 && remoteClusters[0] != "cluster-b" {
+		t.Errorf("expected cluster-b, got %s", remoteClusters[0])
+	}
+}
+
+func TestRenewalDefaults(t *testing.T) {
+	content := `
+clusters:
+  cluster-a:
+    issuer: "https://oidc.example.com"
+`
+	cfg := loadFromString(t, content)
+
+	// Should use defaults when no renewal config
+	if cfg.GetRenewalInterval() != DefaultRenewalInterval {
+		t.Errorf("interval = %v, want %v", cfg.GetRenewalInterval(), DefaultRenewalInterval)
+	}
+	if cfg.GetRenewalTokenDuration() != DefaultRenewalTokenDuration {
+		t.Errorf("token_duration = %v, want %v", cfg.GetRenewalTokenDuration(), DefaultRenewalTokenDuration)
 	}
 }
 

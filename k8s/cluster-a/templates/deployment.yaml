@@ -48,8 +48,3 @@ spec:
         secret:
           secretName: multi-k8s-auth
           optional: true
-          items:
-          - key: cluster-b-token
-            path: cluster-b-token
-          - key: cluster-b-ca.crt
-            path: cluster-b-ca.crt

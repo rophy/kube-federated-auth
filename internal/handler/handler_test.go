@@ -34,11 +34,11 @@ func TestClusters(t *testing.T) {
 	cfg := &config.Config{
 		Clusters: map[string]config.ClusterConfig{
 			"cluster-a": {Issuer: "https://a.example.com"},
-			"cluster-b": {Issuer: "https://b.example.com"},
+			"cluster-b": {Issuer: "https://b.example.com", APIServer: "https://192.168.1.100:6443"},
 		},
 	}
 
-	handler := NewClustersHandler(cfg)
+	handler := NewClustersHandler(cfg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/clusters", nil)
 	w := httptest.NewRecorder()
@@ -56,6 +56,18 @@ func TestClusters(t *testing.T) {
 
 	if len(resp.Clusters) != 2 {
 		t.Errorf("clusters count = %d, want %d", len(resp.Clusters), 2)
+	}
+
+	// Verify cluster info includes issuer and api_server
+	for _, c := range resp.Clusters {
+		if c.Name == "cluster-b" {
+			if c.APIServer != "https://192.168.1.100:6443" {
+				t.Errorf("cluster-b api_server = %q, want %q", c.APIServer, "https://192.168.1.100:6443")
+			}
+		}
+		if c.Issuer == "" {
+			t.Errorf("cluster %s issuer is empty", c.Name)
+		}
 	}
 }
 

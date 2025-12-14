@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	authv1 "k8s.io/api/authentication/v1"
@@ -38,24 +41,25 @@ func NewRenewer(cfg *config.Config, store *Store, verifier VerifierInvalidator) 
 	}
 }
 
-// Start begins the renewal loops for all clusters with renewal enabled
+// Start begins the renewal loops for all remote clusters
 func (r *Renewer) Start(ctx context.Context) {
+	interval := r.config.GetRenewalInterval()
 	for clusterName, clusterCfg := range r.config.Clusters {
-		if clusterCfg.Renewal != nil && clusterCfg.Renewal.Enabled {
-			go r.renewLoop(ctx, clusterName, clusterCfg)
+		if clusterCfg.IsRemote() {
+			go r.renewLoop(ctx, clusterName, clusterCfg, interval)
 		}
 	}
 }
 
-func (r *Renewer) renewLoop(ctx context.Context, cluster string, cfg config.ClusterConfig) {
-	log.Printf("Starting credential renewal loop for cluster %s (interval: %s)", cluster, cfg.Renewal.Interval)
+func (r *Renewer) renewLoop(ctx context.Context, cluster string, cfg config.ClusterConfig, interval time.Duration) {
+	log.Printf("Starting credential renewal loop for cluster %s (interval: %s)", cluster, interval)
 
 	// Initial renewal
 	if err := r.renew(ctx, cluster, cfg); err != nil {
 		log.Printf("Initial credential renewal failed for cluster %s: %v", cluster, err)
 	}
 
-	ticker := time.NewTicker(cfg.Renewal.Interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -88,6 +92,12 @@ func (r *Renewer) renew(ctx context.Context, cluster string, cfg config.ClusterC
 		}
 	}
 
+	// Extract namespace and service account from current token
+	namespace, serviceAccount, err := parseServiceAccountFromToken(creds.Token)
+	if err != nil {
+		return fmt.Errorf("parsing token subject: %w", err)
+	}
+
 	// Create K8s client for remote cluster
 	client, err := r.createClient(cfg, creds)
 	if err != nil {
@@ -95,16 +105,17 @@ func (r *Renewer) renew(ctx context.Context, cluster string, cfg config.ClusterC
 	}
 
 	// Call TokenRequest API
-	expirationSeconds := int64(cfg.Renewal.TokenDuration.Seconds())
+	tokenDuration := r.config.GetRenewalTokenDuration()
+	expirationSeconds := int64(tokenDuration.Seconds())
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
 
-	token, err := client.CoreV1().ServiceAccounts(cfg.Renewal.Namespace).CreateToken(
+	token, err := client.CoreV1().ServiceAccounts(namespace).CreateToken(
 		ctx,
-		cfg.Renewal.ServiceAccount,
+		serviceAccount,
 		tokenRequest,
 		metav1.CreateOptions{},
 	)
@@ -131,6 +142,35 @@ func (r *Renewer) renew(ctx context.Context, cluster string, cfg config.ClusterC
 		cluster, token.Status.ExpirationTimestamp.Format(time.RFC3339))
 
 	return nil
+}
+
+// parseServiceAccountFromToken extracts namespace and service account name from JWT token
+// The subject claim format is: system:serviceaccount:<namespace>:<name>
+func parseServiceAccountFromToken(token string) (namespace, serviceAccount string, err error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", "", fmt.Errorf("invalid JWT format")
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", fmt.Errorf("decoding JWT payload: %w", err)
+	}
+
+	var claims struct {
+		Subject string `json:"sub"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", "", fmt.Errorf("parsing JWT claims: %w", err)
+	}
+
+	// Parse: system:serviceaccount:<namespace>:<name>
+	subParts := strings.Split(claims.Subject, ":")
+	if len(subParts) != 4 || subParts[0] != "system" || subParts[1] != "serviceaccount" {
+		return "", "", fmt.Errorf("unexpected subject format: %s", claims.Subject)
+	}
+
+	return subParts[2], subParts[3], nil
 }
 
 func (r *Renewer) createClient(cfg config.ClusterConfig, creds *Credentials) (*kubernetes.Clientset, error) {
