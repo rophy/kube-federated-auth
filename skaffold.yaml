@@ -1,14 +1,12 @@
 apiVersion: skaffold/v4beta7
 kind: Config
 metadata:
-  name: multi-k8s-auth
+  name: cluster-a
 
 build:
   local:
     push: false
     useBuildkit: true
-  tagPolicy:
-    sha256: {}
   artifacts:
   - image: multi-k8s-auth
     docker:
@@ -17,33 +15,29 @@ build:
     docker:
       dockerfile: Dockerfile.test
 
-deploy:
-  kubeContext: kind-cluster-a
-  kubectl: {}
+profiles:
+- name: cluster-a
+  deploy:
+    kubeContext: kind-cluster-a
+    helm:
+      releases:
+      - name: multi-k8s-auth
+        createNamespace: true
+        namespace: multi-k8s-auth
+        chartPath: k8s/cluster-a
+        setValueTemplates:
+          cluster_b.api_server: https://{{.CLUSTER_B_IP}}:6443
+          cluster_b.issuer: "{{.ISSUER}}"
+          cluster_b.bootstrap_token: "{{.BOOTSTRAP_TOKEN}}"
+          cluster_b.ca_cert: "{{.CA_CERT}}"
+          cluster_b.create_secret: "{{.CREATE_SECRET}}"
+- name: cluster-b
+  deploy:
+    kubeContext: kind-cluster-b
+    helm:
+      releases:
+      - name: multi-k8s-auth-agent
+        createNamespace: true
+        namespace: multi-k8s-auth
+        chartPath: k8s/cluster-b
 
-manifests:
-  rawYaml:
-  - k8s/cluster-a/namespace.yaml
-  - k8s/cluster-a/serviceaccount.yaml
-  # configmap.yaml is created by setup-multicluster.sh with dynamic cluster-b config
-  - k8s/cluster-a/deployment.yaml
-  - k8s/cluster-a/service.yaml
-  - k8s/cluster-a/test-client.yaml
-
----
-apiVersion: skaffold/v4beta7
-kind: Config
-metadata:
-  name: cluster-b
-
-build:
-  artifacts: []
-
-deploy:
-  kubeContext: kind-cluster-b
-  kubectl: {}
-
-manifests:
-  rawYaml:
-  - k8s/cluster-b/namespace.yaml
-  - k8s/cluster-b/test-client.yaml

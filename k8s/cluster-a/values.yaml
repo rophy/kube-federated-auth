@@ -1,0 +1,6 @@
+cluster_b:
+  issuer:
+  api_server:
+  bootstrap_token:
+  ca_cert:
+  create_secret: "false"

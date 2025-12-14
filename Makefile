@@ -1,4 +1,4 @@
-.PHONY: build kind deploy test-unit test-e2e test-e2e-local test-e2e-remote test destroy clean help
+.PHONY: build kind deploy test-unit test-e2e test destroy clean help
 
 # Build Docker images
 build:
@@ -14,53 +14,19 @@ kind:
 # Deploy to multi-cluster environment
 # Flow: create clusters → deploy cluster-b → get creds → deploy cluster-a
 deploy:
-	@echo "=========================================="
-	@echo "Deploying to Multi-Cluster Environment"
-	@echo "=========================================="
-	@echo ""
-	@echo "Step 1: Ensuring kind clusters exist..."
-	@./scripts/setup-kind-clusters.sh
-	@echo ""
-	@echo "Step 2: Building images..."
-	@skaffold build --kube-context kind-cluster-a
-	@echo ""
-	@echo "Step 3: Deploying to cluster-b first..."
-	@docker tag $$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^multi-k8s-auth-test:' | head -1) multi-k8s-auth-test:latest
-	@kind load docker-image multi-k8s-auth-test:latest --name cluster-b
-	@kubectl config use-context kind-cluster-b
-	@kubectl apply -f k8s/cluster-b/
-	@echo "Waiting for test-client in cluster-b to be ready..."
-	@kubectl wait --for=condition=ready pod -l app=test-client -n multi-k8s-auth --timeout=120s
-	@echo ""
-	@echo "Step 4: Extracting cluster-b credentials and configuring cluster-a..."
-	@./scripts/setup-multicluster.sh
-	@echo ""
-	@echo "Step 5: Deploying to cluster-a..."
-	@kubectl config use-context kind-cluster-a
-	@skaffold run -m multi-k8s-auth --kube-context kind-cluster-a
-	@echo ""
-	@echo "✅ Deployment complete!"
-	@echo ""
-	@echo "Next: Run 'make test' to verify authentication"
+	scripts/setup-kind-clusters.sh
+	skaffold run -p cluster-b
+	scripts/setup-multicluster.sh
+	skaffold run -p cluster-a
 
 # Run unit tests
 test-unit:
 	go test -v ./internal/...
 
 # Run e2e tests in cluster-a
-test-e2e-local:
+test-e2e:
 	@echo "Running e2e tests in cluster-a..."
-	@kubectl config use-context kind-cluster-a
-	kubectl exec -n multi-k8s-auth deployment/test-client -- go test -v ./test/e2e/...
-
-# Run e2e tests in cluster-b (cross-cluster)
-test-e2e-remote:
-	@echo "Running e2e tests in cluster-b..."
-	@kubectl config use-context kind-cluster-b
-	kubectl exec -n multi-k8s-auth deployment/test-client -- go test -v ./test/e2e/...
-
-# Run all e2e tests
-test-e2e: test-e2e-local test-e2e-remote
+	kubectl --context kind-cluster-a exec -n multi-k8s-auth deployment/test-client -- go test -v ./test/e2e/...
 
 # Run all tests
 test: test-unit test-e2e
@@ -100,9 +66,7 @@ help:
 	@echo "  make deploy            - Setup clusters and deploy everything"
 	@echo "  make test              - Run all tests (unit + e2e)"
 	@echo "  make test-unit         - Run unit tests only"
-	@echo "  make test-e2e          - Run e2e tests in both clusters"
-	@echo "  make test-e2e-local    - Run e2e tests in cluster-a only"
-	@echo "  make test-e2e-remote   - Run e2e tests in cluster-b only"
+	@echo "  make test-e2e          - Run e2e tests in cluster-a"
 	@echo "  make destroy           - Destroy everything (deployments + clusters)"
 	@echo ""
 	@echo "Workflow:"
@@ -115,5 +79,5 @@ help:
 	@echo ""
 	@echo "Architecture:"
 	@echo "  - cluster-a: multi-k8s-auth service + test-client"
-	@echo "  - cluster-b: test-client (validates tokens against cluster-a service)"
+	@echo "  - cluster-b: provides OIDC endpoint for cross-cluster token validation"
 	@echo ""

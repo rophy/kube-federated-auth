@@ -1,5 +1,7 @@
 FROM golang:1.24-alpine
 
+RUN apk add --no-cache tini bash
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -7,4 +9,6 @@ RUN go mod download
 
 COPY . .
 
-CMD ["sleep", "infinity"]
+ENTRYPOINT ["/sbin/tini", "--"]
+
+CMD ["bash", "-c", "sleep infinity"]
