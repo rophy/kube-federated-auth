@@ -1,0 +1,4 @@
+agent:
+  endpoint: ""
+  clusterName: "cluster-b"
+  refreshInterval: "168h"

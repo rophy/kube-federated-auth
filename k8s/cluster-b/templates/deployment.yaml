@@ -1,48 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: multi-k8s-auth
+  name: multi-k8s-auth-agent
   namespace: multi-k8s-auth
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: multi-k8s-auth
+      app: multi-k8s-auth-agent
   template:
     metadata:
       labels:
-        app: multi-k8s-auth
+        app: multi-k8s-auth-agent
     spec:
-      serviceAccountName: multi-k8s-auth
+      serviceAccountName: multi-k8s-auth-agent
       containers:
-      - name: multi-k8s-auth
-        image: multi-k8s-auth
-        args:
-        - --config=/etc/multi-k8s-auth/clusters.yaml
-        volumeMounts:
-        - name: config
-          mountPath: /etc/multi-k8s-auth
-          readOnly: true
-        - name: cluster-certs
-          mountPath: /etc/multi-k8s-auth/certs
-          readOnly: true
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 10
-      volumes:
-      - name: config
-        configMap:
-          name: multi-k8s-auth-config
-      - name: cluster-certs
-        secret:
-          secretName: cluster-certs
-          optional: true
+      - name: agent
+        image: multi-k8s-auth-agent
+        env:
+        - name: MULTI_K8S_AUTH_ENDPOINT
+          value: {{ .Values.agent.endpoint | quote }}
+        - name: CLUSTER_NAME
+          value: {{ .Values.agent.clusterName | quote }}
+        - name: REFRESH_INTERVAL
+          value: {{ .Values.agent.refreshInterval | quote }}

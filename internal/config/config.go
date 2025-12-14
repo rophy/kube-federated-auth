@@ -23,8 +23,14 @@ func (c *ClusterConfig) DiscoveryURL() string {
 	return c.Issuer
 }
 
+// AgentConfig defines which ServiceAccount is authorized to register credentials for a cluster
+type AgentConfig struct {
+	ServiceAccount string `yaml:"serviceAccount"`
+}
+
 type Config struct {
 	Clusters map[string]ClusterConfig `yaml:"clusters"`
+	Agents   map[string]AgentConfig   `yaml:"agents,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
@@ -54,6 +60,24 @@ func Load(path string) (*Config, error) {
 func (c *Config) ClusterNames() []string {
 	names := make([]string, 0, len(c.Clusters))
 	for name := range c.Clusters {
+		names = append(names, name)
+	}
+	return names
+}
+
+// IsAgentAuthorized checks if a ServiceAccount is authorized to register credentials for a cluster
+func (c *Config) IsAgentAuthorized(cluster, serviceAccount string) bool {
+	agent, ok := c.Agents[cluster]
+	if !ok {
+		return false
+	}
+	return agent.ServiceAccount == serviceAccount
+}
+
+// GetAgentClusters returns cluster names that have agent configuration
+func (c *Config) GetAgentClusters() []string {
+	names := make([]string, 0, len(c.Agents))
+	for name := range c.Agents {
 		names = append(names, name)
 	}
 	return names

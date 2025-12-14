@@ -19,3 +19,8 @@ data:
         ca_cert: "/etc/multi-k8s-auth/certs/cluster-b-ca.crt"
         token_path: "/etc/multi-k8s-auth/certs/cluster-b-token"
 
+    # Authorized agents that can register credentials
+    agents:
+      cluster-b:
+        serviceAccount: "system:serviceaccount:multi-k8s-auth:multi-k8s-auth-agent"
+

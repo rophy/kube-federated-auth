@@ -11,6 +11,9 @@ build:
   - image: multi-k8s-auth
     docker:
       dockerfile: Dockerfile
+  - image: multi-k8s-auth-agent
+    docker:
+      dockerfile: Dockerfile.agent
   - image: multi-k8s-auth-test
     docker:
       dockerfile: Dockerfile.test
@@ -40,4 +43,6 @@ profiles:
         createNamespace: true
         namespace: multi-k8s-auth
         chartPath: k8s/cluster-b
+        setValueTemplates:
+          agent.endpoint: "http://{{.CLUSTER_A_IP}}:30080"
 

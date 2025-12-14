@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup multi-cluster authentication
 # This script runs AFTER cluster-b is deployed, BEFORE cluster-a is deployed
-# It extracts cluster-b credentials and prepares cluster-a configuration
+# It extracts cluster-b credentials and appends to skaffold.env
 set -e
 
 CLUSTER_A="cluster-a"
@@ -13,19 +13,16 @@ echo "Configuring Multi-Cluster Authentication"
 echo "=========================================="
 echo ""
 
-# Get cluster IPs
-CLUSTER_A_IP=$(docker inspect ${CLUSTER_A}-control-plane --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-CLUSTER_B_IP=$(docker inspect ${CLUSTER_B}-control-plane --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+# Read existing IPs from skaffold.env
+source skaffold.env
 echo "Cluster-A API Server IP: $CLUSTER_A_IP"
 echo "Cluster-B API Server IP: $CLUSTER_B_IP"
-echo "CLUSTER_A_IP=$CLUSTER_A_IP" > skaffold.env
-echo "CLUSTER_B_IP=$CLUSTER_B_IP" >> skaffold.env
 
-# Create a temporary token for accessing cluster-b OIDC endpoints
+# Create a bootstrap token from the agent service account for accessing cluster-b OIDC endpoints
 TOKEN_FILE="/tmp/cluster-b-token.txt"
-kubectl --context=kind-${CLUSTER_B} --namespace=${NAMESPACE} create token test-client --duration=1h > "$TOKEN_FILE"
+kubectl --context=kind-${CLUSTER_B} --namespace=${NAMESPACE} create token multi-k8s-auth-agent --duration=168h > "$TOKEN_FILE"
 echo "BOOTSTRAP_TOKEN=$(cat $TOKEN_FILE | base64 -w0)" >> skaffold.env
-echo "✅ Token created"
+echo "✅ Bootstrap token created (7 day TTL)"
 
 # Extract CA certificate
 CA_FILE="/tmp/cluster-b-ca.crt"
@@ -38,7 +35,7 @@ ISSUER=$(cat "$TOKEN_FILE" | cut -d'.' -f2 | base64 -d 2>/dev/null | jq -r '.iss
 echo "ISSUER=$ISSUER" >> skaffold.env
 echo "Cluster-B Issuer: $ISSUER"
 
-# Does the secret exists?
+# Does the secret exist?
 kubectl get secret multi-k8s-auth --context=kind-${CLUSTER_A} --namespace=${NAMESPACE} >/dev/null 2>&1 && CREATE_SECRET=false || CREATE_SECRET=true
 echo "CREATE_SECRET=${CREATE_SECRET}" >> skaffold.env
 

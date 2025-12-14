@@ -62,5 +62,13 @@ echo "=========================================="
 kind get clusters
 
 echo ""
+echo "=========================================="
+echo "Writing Cluster IPs to skaffold.env"
+echo "=========================================="
+echo "CLUSTER_A_IP=$CLUSTER_A_IP" > skaffold.env
+echo "CLUSTER_B_IP=$CLUSTER_B_IP" >> skaffold.env
+echo "✅ Written to skaffold.env"
+
+echo ""
 echo "✅ Kind clusters are ready for multi-cluster testing"
 echo ""

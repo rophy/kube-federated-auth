@@ -14,6 +14,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/rophy/multi-k8s-auth/internal/config"
+	"github.com/rophy/multi-k8s-auth/internal/credentials"
 )
 
 type Claims struct {
@@ -31,13 +32,22 @@ type VerifierManager struct {
 	mu        sync.RWMutex
 	verifiers map[string]*oidc.IDTokenVerifier
 	config    *config.Config
+	credStore *credentials.Store
 }
 
-func NewVerifierManager(cfg *config.Config) *VerifierManager {
+func NewVerifierManager(cfg *config.Config, credStore *credentials.Store) *VerifierManager {
 	return &VerifierManager{
 		verifiers: make(map[string]*oidc.IDTokenVerifier),
 		config:    cfg,
+		credStore: credStore,
 	}
+}
+
+// InvalidateVerifier removes a cached verifier, forcing recreation with new credentials
+func (m *VerifierManager) InvalidateVerifier(clusterName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.verifiers, clusterName)
 }
 
 func (m *VerifierManager) Verify(ctx context.Context, clusterName, rawToken string) (*Claims, error) {
@@ -102,7 +112,7 @@ func (m *VerifierManager) getOrCreateVerifier(ctx context.Context, name string, 
 		return v, nil
 	}
 
-	httpClient, err := m.createHTTPClient(cfg)
+	httpClient, err := m.createHTTPClient(name, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -182,15 +192,30 @@ func rewriteJWKSURL(jwksURL, apiServer string) string {
 	return jwksURL
 }
 
-func (m *VerifierManager) createHTTPClient(cfg config.ClusterConfig) (*http.Client, error) {
+func (m *VerifierManager) createHTTPClient(clusterName string, cfg config.ClusterConfig) (*http.Client, error) {
 	var transport http.RoundTripper = http.DefaultTransport
 
-	if cfg.CACert != "" {
-		caCert, err := os.ReadFile(cfg.CACert)
+	// Check for dynamic credentials first
+	var caCert []byte
+	var token string
+
+	if m.credStore != nil {
+		if creds, ok := m.credStore.Get(clusterName); ok {
+			caCert = creds.CACert
+			token = creds.Token
+		}
+	}
+
+	// Fall back to file-based credentials if no dynamic credentials
+	if caCert == nil && cfg.CACert != "" {
+		var err error
+		caCert, err = os.ReadFile(cfg.CACert)
 		if err != nil {
 			return nil, fmt.Errorf("reading CA cert: %w", err)
 		}
+	}
 
+	if caCert != nil {
 		caCertPool := x509.NewCertPool()
 		if !caCertPool.AppendCertsFromPEM(caCert) {
 			return nil, fmt.Errorf("failed to parse CA cert")
@@ -203,7 +228,13 @@ func (m *VerifierManager) createHTTPClient(cfg config.ClusterConfig) (*http.Clie
 		}
 	}
 
-	if cfg.TokenPath != "" {
+	// Use dynamic token if available, otherwise use token file
+	if token != "" {
+		transport = &staticTokenRoundTripper{
+			transport: transport,
+			token:     token,
+		}
+	} else if cfg.TokenPath != "" {
 		transport = &tokenRoundTripper{
 			transport: transport,
 			tokenPath: cfg.TokenPath,
@@ -227,5 +258,16 @@ func (t *tokenRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	req = req.Clone(req.Context())
 	req.Header.Set("Authorization", "Bearer "+string(token))
 
+	return t.transport.RoundTrip(req)
+}
+
+type staticTokenRoundTripper struct {
+	transport http.RoundTripper
+	token     string
+}
+
+func (t *staticTokenRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+t.token)
 	return t.transport.RoundTrip(req)
 }
