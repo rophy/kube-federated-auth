@@ -18,7 +18,7 @@ func main() {
 	configPath := flag.String("config", getEnv("CONFIG_PATH", "config/clusters.yaml"), "path to cluster config file")
 	port := flag.String("port", getEnv("PORT", "8080"), "server port")
 	namespace := flag.String("namespace", getEnv("NAMESPACE", "multi-k8s-auth"), "namespace for credential secret")
-	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "multi-k8s-auth-credentials"), "name of credential secret")
+	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "multi-k8s-auth"), "name of credential secret")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)

@@ -3,20 +3,19 @@ kind: Config
 metadata:
   name: multi-k8s-auth
 
-build:
-  local:
-    push: false
-    useBuildkit: true
-  artifacts:
-  - image: multi-k8s-auth
-    docker:
-      dockerfile: Dockerfile
-  - image: multi-k8s-auth-test
-    docker:
-      dockerfile: Dockerfile.test
-
 profiles:
 - name: cluster-a
+  build:
+    local:
+      push: false
+      useBuildkit: true
+    artifacts:
+    - image: multi-k8s-auth
+      docker:
+        dockerfile: Dockerfile
+    - image: multi-k8s-auth-test
+      docker:
+        dockerfile: Dockerfile.test
   deploy:
     kubeContext: kind-cluster-a
     helm:
@@ -28,9 +27,6 @@ profiles:
         setValueTemplates:
           cluster_b.api_server: https://{{.CLUSTER_B_IP}}:6443
           cluster_b.issuer: "{{.ISSUER}}"
-          cluster_b.bootstrap_token: "{{.BOOTSTRAP_TOKEN}}"
-          cluster_b.ca_cert: "{{.CA_CERT}}"
-          cluster_b.create_secret: "{{.CREATE_SECRET}}"
 - name: cluster-b
   deploy:
     kubeContext: kind-cluster-b
