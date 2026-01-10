@@ -28,7 +28,7 @@ func New(cfg *config.Config, credStore *credentials.Store) *Server {
 
 	r.Get("/health", handler.Health)
 	r.Get("/clusters", handler.NewClustersHandler(cfg, credStore).ServeHTTP)
-	r.Post("/validate", handler.NewValidateHandler(verifier).ServeHTTP)
+	r.Post("/apis/authentication.k8s.io/v1/tokenreviews", handler.NewTokenReviewHandler(verifier).ServeHTTP)
 
 	return &Server{
 		Handler:  r,

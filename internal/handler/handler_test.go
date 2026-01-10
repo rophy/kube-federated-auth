@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	authv1 "k8s.io/api/authentication/v1"
+
 	"github.com/rophy/kube-federated-auth/internal/config"
 )
 
@@ -71,137 +73,134 @@ func TestClusters(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidJSON(t *testing.T) {
-	handler := NewValidateHandler(nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/validate", strings.NewReader("not json"))
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
-
-	var resp ErrorResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-
-	if resp.Error != "invalid_request" {
-		t.Errorf("error = %q, want %q", resp.Error, "invalid_request")
-	}
-}
-
-func TestValidate_MissingCluster(t *testing.T) {
-	handler := NewValidateHandler(nil)
-
-	body := `{"token": "some-token"}`
-	req := httptest.NewRequest(http.MethodPost, "/validate", strings.NewReader(body))
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
-
-	var resp ErrorResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-
-	if resp.Error != "invalid_request" {
-		t.Errorf("error = %q, want %q", resp.Error, "invalid_request")
-	}
-}
-
-func TestValidate_MissingToken(t *testing.T) {
-	handler := NewValidateHandler(nil)
-
-	body := `{"cluster": "some-cluster"}`
-	req := httptest.NewRequest(http.MethodPost, "/validate", strings.NewReader(body))
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
-
-	var resp ErrorResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-
-	if resp.Error != "invalid_request" {
-		t.Errorf("error = %q, want %q", resp.Error, "invalid_request")
-	}
-}
-
-func TestMapError(t *testing.T) {
+func TestExtractClusterFromHost(t *testing.T) {
 	tests := []struct {
-		name       string
-		errMsg     string
-		wantCode   int
-		wantError  string
+		host string
+		want string
 	}{
-		{
-			name:      "cluster not found",
-			errMsg:    "cluster not found: unknown",
-			wantCode:  http.StatusBadRequest,
-			wantError: "cluster_not_found",
-		},
-		{
-			name:      "token expired",
-			errMsg:    "token is expired",
-			wantCode:  http.StatusUnauthorized,
-			wantError: "token_expired",
-		},
-		{
-			name:      "invalid signature",
-			errMsg:    "failed to verify signature",
-			wantCode:  http.StatusUnauthorized,
-			wantError: "invalid_signature",
-		},
-		{
-			name:      "oidc discovery failed",
-			errMsg:    "creating OIDC provider: connection refused",
-			wantCode:  http.StatusInternalServerError,
-			wantError: "oidc_discovery_failed",
-		},
-		{
-			name:      "jwks fetch failed",
-			errMsg:    "fetching JWKS: timeout",
-			wantCode:  http.StatusInternalServerError,
-			wantError: "jwks_fetch_failed",
-		},
-		{
-			name:      "generic error",
-			errMsg:    "something went wrong",
-			wantCode:  http.StatusUnauthorized,
-			wantError: "invalid_token",
-		},
+		{"api.kube-fed.svc.cluster.local", "local"},
+		{"api.kube-fed.svc.cluster.local:8080", "local"},
+		{"api.kube-fed.svc", "local"},
+		{"api.kube-fed", "local"},
+		{"api.app1.kube-fed.svc.cluster.local", "app1"},
+		{"api.app1.kube-fed.svc.cluster.local:443", "app1"},
+		{"api.cluster-b.kube-fed.svc", "cluster-b"},
+		{"api.my-cluster.kube-fed", "my-cluster"},
+		{"invalid.host.name", ""},
+		{"kube-fed.svc", ""},
+		{"", ""},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			code, resp := mapError(errFromString(tt.errMsg))
-
-			if code != tt.wantCode {
-				t.Errorf("code = %d, want %d", code, tt.wantCode)
-			}
-			if resp.Error != tt.wantError {
-				t.Errorf("error = %q, want %q", resp.Error, tt.wantError)
+		t.Run(tt.host, func(t *testing.T) {
+			got := extractClusterFromHost(tt.host)
+			if got != tt.want {
+				t.Errorf("extractClusterFromHost(%q) = %q, want %q", tt.host, got, tt.want)
 			}
 		})
 	}
 }
 
-type stringError string
+func TestTokenReview_InvalidJSON(t *testing.T) {
+	handler := NewTokenReviewHandler(nil)
 
-func (e stringError) Error() string { return string(e) }
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader("not json"))
+	req.Host = "api.test-cluster.kube-fed.svc.cluster.local"
+	w := httptest.NewRecorder()
 
-func errFromString(s string) error {
-	return stringError(s)
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+
+	var resp authv1.TokenReview
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp.Status.Authenticated {
+		t.Error("expected authenticated = false")
+	}
+	if resp.Status.Error == "" {
+		t.Error("expected error message")
+	}
+}
+
+func TestTokenReview_MissingToken(t *testing.T) {
+	handler := NewTokenReviewHandler(nil)
+
+	body := `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader(body))
+	req.Host = "api.test-cluster.kube-fed.svc.cluster.local"
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+
+	var resp authv1.TokenReview
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp.Status.Authenticated {
+		t.Error("expected authenticated = false")
+	}
+	if resp.Status.Error != "token is required" {
+		t.Errorf("error = %q, want %q", resp.Status.Error, "token is required")
+	}
+}
+
+func TestTokenReview_InvalidHost(t *testing.T) {
+	handler := NewTokenReviewHandler(nil)
+
+	body := `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{"token":"test"}}`
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader(body))
+	req.Host = "invalid.host.name"
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+
+	var resp authv1.TokenReview
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp.Status.Authenticated {
+		t.Error("expected authenticated = false")
+	}
+	if !strings.Contains(resp.Status.Error, "unable to determine cluster") {
+		t.Errorf("error = %q, expected to contain 'unable to determine cluster'", resp.Status.Error)
+	}
+}
+
+func TestTokenReview_ResponseFormat(t *testing.T) {
+	handler := NewTokenReviewHandler(nil)
+
+	body := `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{"token":"invalid-token"}}`
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader(body))
+	req.Host = "api.test-cluster.kube-fed.svc.cluster.local"
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	var resp authv1.TokenReview
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	// Verify response has correct TypeMeta
+	if resp.APIVersion != "authentication.k8s.io/v1" {
+		t.Errorf("apiVersion = %q, want %q", resp.APIVersion, "authentication.k8s.io/v1")
+	}
+	if resp.Kind != "TokenReview" {
+		t.Errorf("kind = %q, want %q", resp.Kind, "TokenReview")
+	}
 }
