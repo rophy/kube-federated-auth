@@ -43,5 +43,5 @@ spec:
           sources:
           - serviceAccountToken:
               path: token
-              expirationSeconds: 600
-              audience: test-audience
+              expirationSeconds: 3600
+              audience: https://kubernetes.default.svc.cluster.local

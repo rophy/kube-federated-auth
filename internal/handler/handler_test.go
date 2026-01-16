@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	authv1 "k8s.io/api/authentication/v1"
+
 	"github.com/rophy/kube-federated-auth/internal/config"
 )
 
@@ -71,10 +73,10 @@ func TestClusters(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidJSON(t *testing.T) {
-	handler := NewValidateHandler(nil)
+func TestTokenReview_InvalidJSON(t *testing.T) {
+	handler := NewTokenReviewHandler(nil, nil, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/validate", strings.NewReader("not json"))
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader("not json"))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -83,21 +85,24 @@ func TestValidate_InvalidJSON(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 
-	var resp ErrorResponse
+	var resp authv1.TokenReview
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
-	if resp.Error != "invalid_request" {
-		t.Errorf("error = %q, want %q", resp.Error, "invalid_request")
+	if resp.Status.Authenticated {
+		t.Error("expected authenticated = false")
+	}
+	if resp.Status.Error == "" {
+		t.Error("expected error message")
 	}
 }
 
-func TestValidate_MissingCluster(t *testing.T) {
-	handler := NewValidateHandler(nil)
+func TestTokenReview_MissingToken(t *testing.T) {
+	handler := NewTokenReviewHandler(nil, nil, nil)
 
-	body := `{"token": "some-token"}`
-	req := httptest.NewRequest(http.MethodPost, "/validate", strings.NewReader(body))
+	body := `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -106,102 +111,73 @@ func TestValidate_MissingCluster(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 
-	var resp ErrorResponse
+	var resp authv1.TokenReview
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
-	if resp.Error != "invalid_request" {
-		t.Errorf("error = %q, want %q", resp.Error, "invalid_request")
+	if resp.Status.Authenticated {
+		t.Error("expected authenticated = false")
+	}
+	if resp.Status.Error != "token is required" {
+		t.Errorf("error = %q, want %q", resp.Status.Error, "token is required")
 	}
 }
 
-func TestValidate_MissingToken(t *testing.T) {
-	handler := NewValidateHandler(nil)
+func TestTokenReview_NotConfigured(t *testing.T) {
+	handler := NewTokenReviewHandler(nil, nil, nil)
 
-	body := `{"cluster": "some-cluster"}`
-	req := httptest.NewRequest(http.MethodPost, "/validate", strings.NewReader(body))
+	body := `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{"token":"test-token"}}`
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	// Should return 200 with unauthenticated status (not 500)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp ErrorResponse
+	var resp authv1.TokenReview
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
-	if resp.Error != "invalid_request" {
-		t.Errorf("error = %q, want %q", resp.Error, "invalid_request")
+	if resp.Status.Authenticated {
+		t.Error("expected authenticated = false")
+	}
+	if resp.Status.Error != "server not configured" {
+		t.Errorf("error = %q, want %q", resp.Status.Error, "server not configured")
 	}
 }
 
-func TestMapError(t *testing.T) {
-	tests := []struct {
-		name       string
-		errMsg     string
-		wantCode   int
-		wantError  string
-	}{
-		{
-			name:      "cluster not found",
-			errMsg:    "cluster not found: unknown",
-			wantCode:  http.StatusBadRequest,
-			wantError: "cluster_not_found",
-		},
-		{
-			name:      "token expired",
-			errMsg:    "token is expired",
-			wantCode:  http.StatusUnauthorized,
-			wantError: "token_expired",
-		},
-		{
-			name:      "invalid signature",
-			errMsg:    "failed to verify signature",
-			wantCode:  http.StatusUnauthorized,
-			wantError: "invalid_signature",
-		},
-		{
-			name:      "oidc discovery failed",
-			errMsg:    "creating OIDC provider: connection refused",
-			wantCode:  http.StatusInternalServerError,
-			wantError: "oidc_discovery_failed",
-		},
-		{
-			name:      "jwks fetch failed",
-			errMsg:    "fetching JWKS: timeout",
-			wantCode:  http.StatusInternalServerError,
-			wantError: "jwks_fetch_failed",
-		},
-		{
-			name:      "generic error",
-			errMsg:    "something went wrong",
-			wantCode:  http.StatusUnauthorized,
-			wantError: "invalid_token",
-		},
+func TestTokenReview_ResponseFormat(t *testing.T) {
+	handler := NewTokenReviewHandler(nil, nil, nil)
+
+	body := `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{"token":"invalid-token"}}`
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	var resp authv1.TokenReview
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			code, resp := mapError(errFromString(tt.errMsg))
-
-			if code != tt.wantCode {
-				t.Errorf("code = %d, want %d", code, tt.wantCode)
-			}
-			if resp.Error != tt.wantError {
-				t.Errorf("error = %q, want %q", resp.Error, tt.wantError)
-			}
-		})
+	// Verify response has correct TypeMeta
+	if resp.APIVersion != "authentication.k8s.io/v1" {
+		t.Errorf("apiVersion = %q, want %q", resp.APIVersion, "authentication.k8s.io/v1")
+	}
+	if resp.Kind != "TokenReview" {
+		t.Errorf("kind = %q, want %q", resp.Kind, "TokenReview")
 	}
 }
 
-type stringError string
-
-func (e stringError) Error() string { return string(e) }
-
-func errFromString(s string) error {
-	return stringError(s)
+func TestExtraKeyClusterName(t *testing.T) {
+	// Verify the constant follows Kubernetes naming convention
+	expected := "authentication.kubernetes.io/cluster-name"
+	if ExtraKeyClusterName != expected {
+		t.Errorf("ExtraKeyClusterName = %q, want %q", ExtraKeyClusterName, expected)
+	}
 }

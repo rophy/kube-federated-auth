@@ -43,12 +43,12 @@ kubectl exec -n kube-federated-auth deploy/test-client --context kind-cluster-a 
 kubectl exec -n kube-federated-auth deploy/test-client --context kind-cluster-a -- \
   curl -s http://kube-federated-auth:8080/clusters | jq .
 
-# Validate a token from cluster-b
+# Validate a token from cluster-b using TokenReview API
 TOKEN=$(kubectl create token kube-federated-auth-reader --context kind-cluster-b -n kube-federated-auth --duration=1h)
 kubectl exec -n kube-federated-auth deploy/test-client --context kind-cluster-a -- \
-  curl -s -X POST http://kube-federated-auth:8080/validate \
+  curl -s -X POST http://api.cluster-b.kube-fed:8080/apis/authentication.k8s.io/v1/tokenreviews \
   -H "Content-Type: application/json" \
-  -d "{\"token\": \"$TOKEN\", \"cluster\": \"cluster-b\"}" | jq .
+  -d "{\"apiVersion\":\"authentication.k8s.io/v1\",\"kind\":\"TokenReview\",\"spec\":{\"token\":\"$TOKEN\"}}" | jq .
 ```
 
 ## Project Structure
@@ -61,7 +61,7 @@ internal/
     renewer.go              # Token renewal logic with renew_before threshold
     store.go                # Credential storage (in-memory + K8s Secret)
   handler/
-    validate.go             # POST /validate endpoint
+    tokenreview.go          # POST /apis/authentication.k8s.io/v1/tokenreviews endpoint
     clusters.go             # GET /clusters endpoint
   oidc/verifier.go          # OIDC/JWKS token verification
   server/server.go          # HTTP server setup
@@ -69,6 +69,8 @@ k8s/
   cluster-a/                # Helm chart for main cluster (runs server)
   cluster-b/                # Helm chart for remote cluster (ServiceAccount only)
 config/clusters.example.yaml # Example configuration
+docs/
+  DESIGN_V2.md              # V2 architecture design document
 ```
 
 ## Git Commit Convention

@@ -9,16 +9,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	authv1 "k8s.io/api/authentication/v1"
 )
 
 // These tests can run in two modes:
-// 1. In-cluster: as a pod with SERVICE_URL and TOKEN_PATH env vars
-// 2. Local: with kubectl port-forward (SERVICE_URL=http://localhost:8080)
+// 1. In-cluster: as a pod with SERVICE_HOST and TOKEN_PATH env vars
+// 2. Local: with kubectl port-forward (SERVICE_HOST=localhost:8080)
+//
+// V2 API: The TokenReview endpoint auto-detects the source cluster via JWKS
+// signature verification, so no cluster specification is needed in requests.
 
 var (
-	serviceURL  = getEnv("SERVICE_URL", "http://localhost:8080")
+	serviceHost = getEnv("SERVICE_HOST", "localhost:8080")
 	tokenPath   = getEnv("TOKEN_PATH", "")
-	clusterName = getEnv("CLUSTER_NAME", "minikube")
+	clusterName = getEnv("CLUSTER_NAME", "cluster-b")
 )
 
 func getEnv(key, fallback string) string {
@@ -26,6 +31,11 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// buildBaseURL constructs the service URL
+func buildBaseURL() string {
+	return fmt.Sprintf("http://%s", serviceHost)
 }
 
 func TestMain(m *testing.M) {
@@ -41,7 +51,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestHealth(t *testing.T) {
-	resp, err := http.Get(serviceURL + "/health")
+	resp, err := http.Get(buildBaseURL() + "/health")
 	if err != nil {
 		t.Fatalf("failed to call /health: %v", err)
 	}
@@ -62,7 +72,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestClusters(t *testing.T) {
-	resp, err := http.Get(serviceURL + "/clusters")
+	resp, err := http.Get(buildBaseURL() + "/clusters")
 	if err != nil {
 		t.Fatalf("failed to call /clusters: %v", err)
 	}
@@ -73,7 +83,9 @@ func TestClusters(t *testing.T) {
 	}
 
 	var body struct {
-		Clusters []string `json:"clusters"`
+		Clusters []struct {
+			Name string `json:"name"`
+		} `json:"clusters"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
@@ -81,121 +93,107 @@ func TestClusters(t *testing.T) {
 
 	found := false
 	for _, c := range body.Clusters {
-		if c == clusterName {
+		if c.Name == clusterName {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("cluster %q not found in %v", clusterName, body.Clusters)
+		names := make([]string, len(body.Clusters))
+		for i, c := range body.Clusters {
+			names[i] = c.Name
+		}
+		t.Errorf("cluster %q not found in %v", clusterName, names)
 	}
 }
 
-func TestValidate_Success(t *testing.T) {
+func TestTokenReview_Success(t *testing.T) {
 	token := getTestToken(t)
 
-	reqBody, _ := json.Marshal(map[string]string{
-		"cluster": clusterName,
-		"token":   token,
-	})
+	tr := &authv1.TokenReview{
+		Spec: authv1.TokenReviewSpec{
+			Token: token,
+		},
+	}
+	tr.APIVersion = "authentication.k8s.io/v1"
+	tr.Kind = "TokenReview"
 
-	resp, err := http.Post(serviceURL+"/validate", "application/json", bytes.NewReader(reqBody))
+	reqBody, _ := json.Marshal(tr)
+
+	// V2: No cluster specification needed - auto-detected via JWKS
+	url := buildBaseURL() + "/apis/authentication.k8s.io/v1/tokenreviews"
+	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
-		t.Fatalf("failed to call /validate: %v", err)
+		t.Fatalf("failed to call tokenreviews: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var errResp map[string]string
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		t.Fatalf("status = %d, want %d, error: %v", resp.StatusCode, http.StatusOK, errResp)
+	var result authv1.TokenReview
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	var claims map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&claims); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d, error: %s", resp.StatusCode, http.StatusOK, result.Status.Error)
+	}
+
+	if !result.Status.Authenticated {
+		t.Fatalf("expected authenticated = true, got error: %s", result.Status.Error)
 	}
 
 	// Verify expected fields
-	if claims["cluster"] != clusterName {
-		t.Errorf("cluster = %v, want %v", claims["cluster"], clusterName)
+	if !strings.HasPrefix(result.Status.User.Username, "system:serviceaccount:") {
+		t.Errorf("username = %v, want system:serviceaccount:...", result.Status.User.Username)
 	}
 
-	sub, ok := claims["sub"].(string)
-	if !ok || !strings.HasPrefix(sub, "system:serviceaccount:") {
-		t.Errorf("sub = %v, want system:serviceaccount:...", claims["sub"])
+	if result.APIVersion != "authentication.k8s.io/v1" {
+		t.Errorf("apiVersion = %q, want %q", result.APIVersion, "authentication.k8s.io/v1")
 	}
 
-	if claims["iss"] == nil {
-		t.Error("iss is missing")
+	if result.Kind != "TokenReview" {
+		t.Errorf("kind = %q, want %q", result.Kind, "TokenReview")
 	}
 
-	if claims["aud"] == nil {
-		t.Error("aud is missing")
-	}
-
-	k8s, ok := claims["kubernetes.io"].(map[string]any)
-	if !ok {
-		t.Error("kubernetes.io claims missing")
-	} else {
-		if k8s["namespace"] == nil {
-			t.Error("kubernetes.io.namespace is missing")
-		}
-		if k8s["serviceaccount"] == nil {
-			t.Error("kubernetes.io.serviceaccount is missing")
-		}
+	// V2: Verify cluster-name is included in extra field
+	extraClusterName := result.Status.User.Extra["authentication.kubernetes.io/cluster-name"]
+	if len(extraClusterName) == 0 {
+		t.Error("expected cluster-name in extra field")
+	} else if extraClusterName[0] != clusterName {
+		t.Errorf("extra[cluster-name] = %q, want %q", extraClusterName[0], clusterName)
 	}
 }
 
-func TestValidate_InvalidToken(t *testing.T) {
-	reqBody, _ := json.Marshal(map[string]string{
-		"cluster": clusterName,
-		"token":   "invalid.token.here",
-	})
+func TestTokenReview_InvalidToken(t *testing.T) {
+	tr := &authv1.TokenReview{
+		Spec: authv1.TokenReviewSpec{
+			Token: "invalid.token.here",
+		},
+	}
+	tr.APIVersion = "authentication.k8s.io/v1"
+	tr.Kind = "TokenReview"
 
-	resp, err := http.Post(serviceURL+"/validate", "application/json", bytes.NewReader(reqBody))
+	reqBody, _ := json.Marshal(tr)
+
+	// V2: No cluster specification needed - invalid tokens are rejected
+	// because they don't match any configured cluster's JWKS
+	url := buildBaseURL() + "/apis/authentication.k8s.io/v1/tokenreviews"
+	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
-		t.Fatalf("failed to call /validate: %v", err)
+		t.Fatalf("failed to call tokenreviews: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
-	}
-
-	var errResp map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+	var result authv1.TokenReview
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if errResp["error"] == "" {
-		t.Error("error field is missing")
-	}
-}
-
-func TestValidate_UnknownCluster(t *testing.T) {
-	reqBody, _ := json.Marshal(map[string]string{
-		"cluster": "unknown-cluster",
-		"token":   "some-token",
-	})
-
-	resp, err := http.Post(serviceURL+"/validate", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		t.Fatalf("failed to call /validate: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	if result.Status.Authenticated {
+		t.Error("expected authenticated = false for invalid token")
 	}
 
-	var errResp map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if errResp["error"] != "cluster_not_found" {
-		t.Errorf("error = %q, want %q", errResp["error"], "cluster_not_found")
+	if result.Status.Error == "" {
+		t.Error("expected error message for invalid token")
 	}
 }
 
@@ -220,10 +218,10 @@ func getTestToken(t *testing.T) string {
 func waitForService(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(serviceURL + "/health")
+		resp, err := http.Get(buildBaseURL() + "/health")
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
-			fmt.Printf("Service ready at %s\n", serviceURL)
+			fmt.Printf("Service ready at %s\n", buildBaseURL())
 			return
 		}
 		if resp != nil {
@@ -231,5 +229,5 @@ func waitForService(timeout time.Duration) {
 		}
 		time.Sleep(time.Second)
 	}
-	fmt.Printf("Warning: service at %s may not be ready\n", serviceURL)
+	fmt.Printf("Warning: service at %s may not be ready\n", buildBaseURL())
 }

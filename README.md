@@ -11,7 +11,7 @@ flowchart LR
     subgraph cluster-a["cluster-a (service)"]
         svc[my-svc]
         kfa[kube-federated-auth]
-        svc -->|1. validate token| kfa
+        svc -->|1. TokenReview| kfa
     end
 
     subgraph cluster-b["cluster-b (client)"]
@@ -24,9 +24,9 @@ flowchart LR
 ```
 
 1. Client workload sends its ServiceAccount token to your service
-2. Your service calls kube-federated-auth `/validate` endpoint
+2. Your service calls kube-federated-auth using standard Kubernetes TokenReview API
 3. kube-federated-auth validates the JWT against the cluster's OIDC/JWKS
-4. Your service authorizes based on returned claims
+4. Your service authorizes based on returned user info
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ renewal:
 
 clusters:
   # Local cluster (uses in-cluster OIDC)
-  cluster-a:
+  local:
     issuer: "https://kubernetes.default.svc.cluster.local"
 
   # EKS cluster (public OIDC endpoint)
@@ -66,53 +66,62 @@ clusters:
 
 ## API
 
-### POST /validate
+### POST /apis/authentication.k8s.io/v1/tokenreviews
 
-Validate a ServiceAccount token.
+Standard Kubernetes TokenReview API. The target cluster is determined by the hostname.
+
+**Hostname-based routing:**
+
+| Hostname | Cluster |
+|----------|---------|
+| `api.kube-fed.svc.cluster.local` | `local` |
+| `api.{cluster}.kube-fed.svc.cluster.local` | `{cluster}` |
+
+**Request:**
 
 ```bash
-curl -X POST http://localhost:8080/validate \
+curl -X POST http://api.cluster-b.kube-fed.svc.cluster.local:8080/apis/authentication.k8s.io/v1/tokenreviews \
   -H "Content-Type: application/json" \
-  -d '{"token": "<sa-token>", "cluster": "cluster-b"}'
+  -d '{
+    "apiVersion": "authentication.k8s.io/v1",
+    "kind": "TokenReview",
+    "spec": {
+      "token": "<sa-token>"
+    }
+  }'
 ```
 
-**Status Codes:**
+**Success response:**
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `200` | - | Token valid |
-| `400` | `cluster_not_found` | Unknown cluster |
-| `400` | - | Invalid JSON or missing fields |
-| `401` | `token_expired` | Token has expired |
-| `401` | `invalid_signature` | Signature verification failed |
-| `401` | `invalid_token` | Other token errors |
-| `500` | `oidc_discovery_failed` | Cannot fetch OIDC config |
-| `500` | `jwks_fetch_failed` | Cannot fetch JWKS |
-
-Success response:
 ```json
 {
-  "cluster": "cluster-b",
-  "iss": "https://kubernetes.default.svc.cluster.local",
-  "sub": "system:serviceaccount:default:my-app",
-  "aud": ["https://kubernetes.default.svc.cluster.local"],
-  "exp": 1766323600,
-  "iat": 1765718800,
-  "kubernetes.io": {
-    "namespace": "default",
-    "serviceaccount": {
-      "name": "my-app",
-      "uid": "..."
-    }
+  "apiVersion": "authentication.k8s.io/v1",
+  "kind": "TokenReview",
+  "status": {
+    "authenticated": true,
+    "user": {
+      "username": "system:serviceaccount:default:my-app",
+      "uid": "abc-123",
+      "groups": [
+        "system:serviceaccounts",
+        "system:serviceaccounts:default"
+      ]
+    },
+    "audiences": ["api"]
   }
 }
 ```
 
-Error response:
+**Error response:**
+
 ```json
 {
-  "error": "invalid_signature",
-  "message": "Token signature verification failed"
+  "apiVersion": "authentication.k8s.io/v1",
+  "kind": "TokenReview",
+  "status": {
+    "authenticated": false,
+    "error": "token has expired"
+  }
 }
 ```
 
@@ -124,11 +133,9 @@ List configured clusters and their status.
 {
   "clusters": [
     {
-      "name": "cluster-a",
+      "name": "local",
       "issuer": "https://kubernetes.default.svc.cluster.local",
       "token_status": {
-        "expires_at": "2026-12-14T13:30:06Z",
-        "expires_in": "8759h53m30s",
         "status": "valid"
       }
     },
@@ -150,6 +157,38 @@ List configured clusters and their status.
 
 ```json
 {"status":"ok"}
+```
+
+## Kubernetes Services
+
+Create a service per cluster to enable hostname-based routing:
+
+```yaml
+# Service for local cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: api.kube-fed
+  namespace: kube-federated-auth
+spec:
+  selector:
+    app: kube-federated-auth
+  ports:
+    - port: 443
+      targetPort: 8080
+---
+# Service for remote cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: api.cluster-b.kube-fed
+  namespace: kube-federated-auth
+spec:
+  selector:
+    app: kube-federated-auth
+  ports:
+    - port: 443
+      targetPort: 8080
 ```
 
 ## Environment Variables
