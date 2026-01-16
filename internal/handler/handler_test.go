@@ -13,10 +13,12 @@ import (
 )
 
 func TestHealth(t *testing.T) {
+	handler := NewHealthHandler("v1.2.3")
+
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 
-	Health(w, req)
+	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -29,6 +31,10 @@ func TestHealth(t *testing.T) {
 
 	if resp.Status != "ok" {
 		t.Errorf("status = %q, want %q", resp.Status, "ok")
+	}
+
+	if resp.Version != "v1.2.3" {
+		t.Errorf("version = %q, want %q", resp.Version, "v1.2.3")
 	}
 }
 

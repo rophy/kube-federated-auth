@@ -14,6 +14,9 @@ import (
 	"github.com/rophy/kube-federated-auth/internal/server"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=..."
+var Version = "dev"
+
 func main() {
 	configPath := flag.String("config", getEnv("CONFIG_PATH", "config/clusters.yaml"), "path to cluster config file")
 	port := flag.String("port", getEnv("PORT", "8080"), "server port")
@@ -48,7 +51,8 @@ func main() {
 		}
 	}
 
-	srv := server.New(cfg, credStore)
+	log.Printf("kube-federated-auth version %s", Version)
+	srv := server.New(cfg, credStore, Version)
 
 	// Start credential renewal for remote clusters
 	if len(remoteClusters) > 0 {

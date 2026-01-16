@@ -1,12 +1,14 @@
 FROM golang:1.24-alpine AS builder
 
+ARG VERSION=dev
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -o /kube-federated-auth ./cmd/server
+RUN CGO_ENABLED=0 go build -ldflags "-X main.Version=${VERSION}" -o /kube-federated-auth ./cmd/server
 
 FROM alpine:3.20
 

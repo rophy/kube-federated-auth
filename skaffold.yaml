@@ -16,6 +16,8 @@ profiles:
     - image: kube-federated-auth
       docker:
         dockerfile: Dockerfile
+        buildArgs:
+          VERSION: "{{.IMAGE_TAG}}"
     - image: kube-federated-auth-test
       docker:
         dockerfile: Dockerfile.test

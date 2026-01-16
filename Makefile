@@ -1,8 +1,12 @@
-.PHONY: build kind deploy test-unit test-e2e test destroy clean help
+.PHONY: build image kind deploy test-unit test-e2e test destroy clean help
 
-# Build Docker images
+# Build Docker images (for local development)
 build:
 	skaffold build -p cluster-a
+
+# Build and tag release image
+image:
+	./scripts/build-image.sh
 
 # Create kind clusters for multi-cluster testing
 kind:
@@ -58,7 +62,8 @@ help:
 	@echo "kube-federated-auth - Cross-Cluster Kubernetes Authentication"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make build             - Build Docker images"
+	@echo "  make build             - Build Docker images (local dev)"
+	@echo "  make image             - Build release image (rophy/kube-federated-auth:TAG)"
 	@echo "  make clean             - Clean local build artifacts"
 	@echo ""
 	@echo "Multi-cluster environment:"
