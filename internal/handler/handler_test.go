@@ -173,3 +173,11 @@ func TestTokenReview_ResponseFormat(t *testing.T) {
 		t.Errorf("kind = %q, want %q", resp.Kind, "TokenReview")
 	}
 }
+
+func TestExtraKeyClusterName(t *testing.T) {
+	// Verify the constant follows Kubernetes naming convention
+	expected := "authentication.kubernetes.io/cluster-name"
+	if ExtraKeyClusterName != expected {
+		t.Errorf("ExtraKeyClusterName = %q, want %q", ExtraKeyClusterName, expected)
+	}
+}

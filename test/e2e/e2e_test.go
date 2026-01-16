@@ -153,6 +153,14 @@ func TestTokenReview_Success(t *testing.T) {
 	if result.Kind != "TokenReview" {
 		t.Errorf("kind = %q, want %q", result.Kind, "TokenReview")
 	}
+
+	// V2: Verify cluster-name is included in extra field
+	extraClusterName := result.Status.User.Extra["authentication.kubernetes.io/cluster-name"]
+	if len(extraClusterName) == 0 {
+		t.Error("expected cluster-name in extra field")
+	} else if extraClusterName[0] != clusterName {
+		t.Errorf("extra[cluster-name] = %q, want %q", extraClusterName[0], clusterName)
+	}
 }
 
 func TestTokenReview_InvalidToken(t *testing.T) {

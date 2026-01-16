@@ -17,6 +17,10 @@ import (
 	"github.com/rophy/kube-federated-auth/internal/oidc"
 )
 
+// ExtraKeyClusterName is the key used in TokenReview response extra field
+// to indicate which cluster the token was validated against.
+const ExtraKeyClusterName = "authentication.kubernetes.io/cluster-name"
+
 type TokenReviewHandler struct {
 	verifier  *oidc.VerifierManager
 	config    *config.Config
@@ -67,6 +71,14 @@ func (h *TokenReviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("TokenReview forwarding failed for cluster %s: %v", cluster, err)
 		h.writeUnauthenticated(w, &tr, fmt.Sprintf("failed to validate token: %v", err))
 		return
+	}
+
+	// Add cluster name to extra field for client awareness
+	if result.Status.Authenticated {
+		if result.Status.User.Extra == nil {
+			result.Status.User.Extra = make(map[string]authv1.ExtraValue)
+		}
+		result.Status.User.Extra[ExtraKeyClusterName] = authv1.ExtraValue{cluster}
 	}
 
 	// Return the response from the remote cluster
