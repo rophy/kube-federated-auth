@@ -1,34 +1,38 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"strings"
 
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
+	"github.com/rophy/kube-federated-auth/internal/config"
+	"github.com/rophy/kube-federated-auth/internal/credentials"
 	"github.com/rophy/kube-federated-auth/internal/oidc"
 )
 
 type TokenReviewHandler struct {
-	verifier *oidc.VerifierManager
+	verifier  *oidc.VerifierManager
+	config    *config.Config
+	credStore *credentials.Store
 }
 
-func NewTokenReviewHandler(v *oidc.VerifierManager) *TokenReviewHandler {
-	return &TokenReviewHandler{verifier: v}
+func NewTokenReviewHandler(v *oidc.VerifierManager, cfg *config.Config, store *credentials.Store) *TokenReviewHandler {
+	return &TokenReviewHandler{
+		verifier:  v,
+		config:    cfg,
+		credStore: store,
+	}
 }
 
 func (h *TokenReviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
-	// Extract cluster from Host header
-	cluster := extractClusterFromHost(r.Host)
-	if cluster == "" {
-		h.writeError(w, http.StatusBadRequest, "unable to determine cluster from host header")
-		return
-	}
 
 	// Parse TokenReview request
 	var tr authv1.TokenReview
@@ -42,83 +46,113 @@ func (h *TokenReviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate token using OIDC verifier
-	if h.verifier == nil {
-		h.writeUnauthenticated(w, &tr, "verifier not configured")
+	if h.verifier == nil || h.config == nil {
+		h.writeUnauthenticated(w, &tr, "server not configured")
 		return
 	}
 
-	claims, err := h.verifier.Verify(r.Context(), cluster, tr.Spec.Token)
+	// Step 1: Detect cluster via JWKS (local, no token leakage)
+	cluster, err := h.detectCluster(r.Context(), tr.Spec.Token)
 	if err != nil {
-		log.Printf("Token validation failed for cluster %s: %v", cluster, err)
-		h.writeUnauthenticated(w, &tr, err.Error())
+		log.Printf("Cluster detection failed: %v", err)
+		h.writeUnauthenticated(w, &tr, "token not valid for any configured cluster")
 		return
 	}
 
-	// Build successful response
-	h.writeAuthenticated(w, &tr, claims)
+	log.Printf("Detected cluster: %s", cluster)
+
+	// Step 2: Forward TokenReview to detected cluster
+	result, err := h.forwardTokenReview(r.Context(), cluster, &tr)
+	if err != nil {
+		log.Printf("TokenReview forwarding failed for cluster %s: %v", cluster, err)
+		h.writeUnauthenticated(w, &tr, fmt.Sprintf("failed to validate token: %v", err))
+		return
+	}
+
+	// Return the response from the remote cluster
+	json.NewEncoder(w).Encode(result)
 }
 
-// extractClusterFromHost extracts the cluster name from the Host header.
-// Expected formats:
-//   - api.{cluster}.kube-fed.svc.cluster.local -> cluster
-//   - api.{cluster}.kube-fed.svc -> cluster
-//   - api.{cluster}.kube-fed -> cluster
-//   - api.kube-fed.svc.cluster.local -> "local"
-//   - api.kube-fed -> "local"
-func extractClusterFromHost(host string) string {
-	// Remove port if present
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
+// detectCluster tries to verify the token against all configured clusters using JWKS.
+// This is done locally without sending the token anywhere.
+// Returns the cluster name that successfully verified the token signature.
+func (h *TokenReviewHandler) detectCluster(ctx context.Context, token string) (string, error) {
+	for clusterName := range h.config.Clusters {
+		_, err := h.verifier.Verify(ctx, clusterName, token)
+		if err == nil {
+			return clusterName, nil
+		}
+		// Signature didn't match - try next cluster
+		log.Printf("Token not valid for cluster %s: %v", clusterName, err)
 	}
-
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-
-	// Expect format: api.{cluster}.kube-fed... or api.kube-fed...
-	if parts[0] != "api" {
-		return ""
-	}
-
-	// api.kube-fed... -> local cluster
-	if parts[1] == "kube-fed" {
-		return "local"
-	}
-
-	// api.{cluster}.kube-fed... -> named cluster
-	if len(parts) >= 3 && parts[2] == "kube-fed" {
-		return parts[1]
-	}
-
-	return ""
+	return "", fmt.Errorf("token signature does not match any configured cluster")
 }
 
-func (h *TokenReviewHandler) writeAuthenticated(w http.ResponseWriter, req *authv1.TokenReview, claims *oidc.Claims) {
-	// Extract user info from claims
-	username := claims.Subject
-	groups := extractGroups(claims)
-	extra := extractExtra(claims)
+// forwardTokenReview sends the TokenReview request to the detected cluster's API server.
+func (h *TokenReviewHandler) forwardTokenReview(ctx context.Context, clusterName string, tr *authv1.TokenReview) (*authv1.TokenReview, error) {
+	clusterCfg, ok := h.config.Clusters[clusterName]
+	if !ok {
+		return nil, fmt.Errorf("cluster not found: %s", clusterName)
+	}
 
-	resp := &authv1.TokenReview{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "authentication.k8s.io/v1",
-			Kind:       "TokenReview",
-		},
-		Status: authv1.TokenReviewStatus{
-			Authenticated: true,
-			User: authv1.UserInfo{
-				Username: username,
-				UID:      getUID(claims),
-				Groups:   groups,
-				Extra:    extra,
+	// Build REST config for the target cluster
+	restConfig, err := h.buildRESTConfig(clusterName, clusterCfg)
+	if err != nil {
+		return nil, fmt.Errorf("building REST config: %w", err)
+	}
+
+	// Create Kubernetes client
+	client, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("creating kubernetes client: %w", err)
+	}
+
+	// Forward TokenReview request
+	result, err := client.AuthenticationV1().TokenReviews().Create(ctx, tr, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("calling TokenReview API: %w", err)
+	}
+
+	// Ensure TypeMeta is set (k8s client doesn't populate this on responses)
+	result.APIVersion = "authentication.k8s.io/v1"
+	result.Kind = "TokenReview"
+
+	return result, nil
+}
+
+// buildRESTConfig creates a REST config for the target cluster
+func (h *TokenReviewHandler) buildRESTConfig(clusterName string, clusterCfg config.ClusterConfig) (*rest.Config, error) {
+	// For clusters with api_server, use remote credentials
+	if clusterCfg.APIServer != "" {
+		var bearerToken string
+		var caCert []byte
+
+		if h.credStore != nil {
+			if creds, ok := h.credStore.Get(clusterName); ok {
+				bearerToken = creds.Token
+				caCert = creds.CACert
+			}
+		}
+
+		return &rest.Config{
+			Host:        clusterCfg.APIServer,
+			BearerToken: bearerToken,
+			TLSClientConfig: rest.TLSClientConfig{
+				CAData: caCert,
 			},
-			Audiences: claims.Audience,
-		},
+		}, nil
 	}
 
-	json.NewEncoder(w).Encode(resp)
+	// For local clusters, try in-cluster config first
+	inClusterConfig, err := rest.InClusterConfig()
+	if err == nil {
+		return inClusterConfig, nil
+	}
+
+	// Fallback: use issuer as host (for testing)
+	return &rest.Config{
+		Host: clusterCfg.Issuer,
+	}, nil
 }
 
 func (h *TokenReviewHandler) writeUnauthenticated(w http.ResponseWriter, req *authv1.TokenReview, errMsg string) {
@@ -149,74 +183,4 @@ func (h *TokenReviewHandler) writeError(w http.ResponseWriter, code int, msg str
 		},
 	}
 	json.NewEncoder(w).Encode(resp)
-}
-
-// extractGroups extracts group information from kubernetes.io claims
-func extractGroups(claims *oidc.Claims) []string {
-	if claims.Kubernetes == nil {
-		return nil
-	}
-
-	// Try to get groups from kubernetes.io claims
-	if groups, ok := claims.Kubernetes["groups"].([]interface{}); ok {
-		result := make([]string, 0, len(groups))
-		for _, g := range groups {
-			if s, ok := g.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	}
-
-	return nil
-}
-
-// extractExtra extracts extra fields from kubernetes.io claims
-func extractExtra(claims *oidc.Claims) map[string]authv1.ExtraValue {
-	if claims.Kubernetes == nil {
-		return nil
-	}
-
-	extra := make(map[string]authv1.ExtraValue)
-
-	// Extract pod binding info if present
-	if pod, ok := claims.Kubernetes["pod"].(map[string]interface{}); ok {
-		if name, ok := pod["name"].(string); ok {
-			extra["authentication.kubernetes.io/pod-name"] = authv1.ExtraValue{name}
-		}
-		if uid, ok := pod["uid"].(string); ok {
-			extra["authentication.kubernetes.io/pod-uid"] = authv1.ExtraValue{uid}
-		}
-	}
-
-	// Extract serviceaccount info if present
-	if sa, ok := claims.Kubernetes["serviceaccount"].(map[string]interface{}); ok {
-		if name, ok := sa["name"].(string); ok {
-			extra["authentication.kubernetes.io/serviceaccount/name"] = authv1.ExtraValue{name}
-		}
-		if ns, ok := sa["namespace"].(string); ok {
-			extra["authentication.kubernetes.io/serviceaccount/namespace"] = authv1.ExtraValue{ns}
-		}
-	}
-
-	if len(extra) == 0 {
-		return nil
-	}
-
-	return extra
-}
-
-// getUID extracts the UID from claims
-func getUID(claims *oidc.Claims) string {
-	if claims.Kubernetes == nil {
-		return ""
-	}
-
-	if sa, ok := claims.Kubernetes["serviceaccount"].(map[string]interface{}); ok {
-		if uid, ok := sa["uid"].(string); ok {
-			return uid
-		}
-	}
-
-	return ""
 }

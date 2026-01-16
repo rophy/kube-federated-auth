@@ -16,6 +16,9 @@ import (
 // These tests can run in two modes:
 // 1. In-cluster: as a pod with SERVICE_HOST and TOKEN_PATH env vars
 // 2. Local: with kubectl port-forward (SERVICE_HOST=localhost:8080)
+//
+// V2 API: The TokenReview endpoint auto-detects the source cluster via JWKS
+// signature verification, so no cluster specification is needed in requests.
 
 var (
 	serviceHost = getEnv("SERVICE_HOST", "localhost:8080")
@@ -30,14 +33,9 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// buildBaseURL constructs URL without cluster routing (for health/clusters endpoints)
+// buildBaseURL constructs the service URL
 func buildBaseURL() string {
 	return fmt.Sprintf("http://%s", serviceHost)
-}
-
-// buildClusterHost returns the Host header value for cluster routing
-func buildClusterHost(cluster string) string {
-	return fmt.Sprintf("api.%s.kube-fed", cluster)
 }
 
 func TestMain(m *testing.M) {
@@ -122,12 +120,9 @@ func TestTokenReview_Success(t *testing.T) {
 
 	reqBody, _ := json.Marshal(tr)
 
+	// V2: No cluster specification needed - auto-detected via JWKS
 	url := buildBaseURL() + "/apis/authentication.k8s.io/v1/tokenreviews"
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Host = buildClusterHost(clusterName)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("failed to call tokenreviews: %v", err)
 	}
@@ -171,12 +166,10 @@ func TestTokenReview_InvalidToken(t *testing.T) {
 
 	reqBody, _ := json.Marshal(tr)
 
+	// V2: No cluster specification needed - invalid tokens are rejected
+	// because they don't match any configured cluster's JWKS
 	url := buildBaseURL() + "/apis/authentication.k8s.io/v1/tokenreviews"
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Host = buildClusterHost(clusterName)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("failed to call tokenreviews: %v", err)
 	}
@@ -193,46 +186,6 @@ func TestTokenReview_InvalidToken(t *testing.T) {
 
 	if result.Status.Error == "" {
 		t.Error("expected error message for invalid token")
-	}
-}
-
-func TestTokenReview_InvalidHost(t *testing.T) {
-	tr := &authv1.TokenReview{
-		Spec: authv1.TokenReviewSpec{
-			Token: "some-token",
-		},
-	}
-	tr.APIVersion = "authentication.k8s.io/v1"
-	tr.Kind = "TokenReview"
-
-	reqBody, _ := json.Marshal(tr)
-
-	url := buildBaseURL() + "/apis/authentication.k8s.io/v1/tokenreviews"
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Host = "invalid.host.name"
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("failed to call tokenreviews: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
-	}
-
-	var result authv1.TokenReview
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if result.Status.Authenticated {
-		t.Error("expected authenticated = false for invalid host")
-	}
-
-	if !strings.Contains(result.Status.Error, "unable to determine cluster") {
-		t.Errorf("error = %q, expected to contain 'unable to determine cluster'", result.Status.Error)
 	}
 }
 
