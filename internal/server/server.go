@@ -21,7 +21,7 @@ type Server struct {
 }
 
 func New(cfg *config.Config, credStore *credentials.Store, version string) *Server {
-	m := metrics.New(version)
+	m := metrics.New(version, cfg.ClientMetricsEnabled())
 
 	verifier := oidc.NewVerifierManager(cfg, credStore)
 	verifier.SetMetrics(m.ClusterDegraded)
@@ -34,6 +34,7 @@ func New(cfg *config.Config, credStore *credentials.Store, version string) *Serv
 
 	trHandler := handler.NewTokenReviewHandler(verifier, cfg, credStore, verifier)
 	trHandler.SetMetrics(m.CacheRequestsTotal, m.CacheEntries)
+	trHandler.SetTokenReviewMetrics(m)
 
 	mux := http.NewServeMux()
 

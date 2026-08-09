@@ -7,18 +7,18 @@ import (
 	"time"
 )
 
-// statusResponseWriter wraps http.ResponseWriter to capture the status code.
-type statusResponseWriter struct {
+// StatusResponseWriter wraps http.ResponseWriter to capture the status code.
+type StatusResponseWriter struct {
 	http.ResponseWriter
 	status int
 }
 
-func (w *statusResponseWriter) WriteHeader(code int) {
+func (w *StatusResponseWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
 
-func (w *statusResponseWriter) Status() int {
+func (w *StatusResponseWriter) Status() int {
 	if w.status == 0 {
 		return http.StatusOK
 	}
@@ -32,6 +32,7 @@ const (
 	clientIdentityKey
 	errorMessageKey
 	cacheStatusKey
+	clusterNameKey
 )
 
 // SetCallerIdentity stores the caller identity in the request context.
@@ -55,6 +56,19 @@ func SetClientIdentity(ctx context.Context, identity string) context.Context {
 // GetClientIdentity retrieves the client identity from context.
 func GetClientIdentity(ctx context.Context) string {
 	if v, ok := ctx.Value(clientIdentityKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// SetClusterName stores the detected cluster name in the request context.
+func SetClusterName(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, clusterNameKey, name)
+}
+
+// GetClusterName retrieves the detected cluster name from context.
+func GetClusterName(ctx context.Context) string {
+	if v, ok := ctx.Value(clusterNameKey).(string); ok {
 		return v
 	}
 	return ""
@@ -93,7 +107,7 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			ww := &statusResponseWriter{ResponseWriter: w}
+			ww := &StatusResponseWriter{ResponseWriter: w}
 
 			next.ServeHTTP(ww, r)
 

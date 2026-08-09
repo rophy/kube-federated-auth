@@ -13,7 +13,7 @@ func MetricsMiddleware(requestsTotal *prometheus.CounterVec, requestDuration *pr
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			ww := &statusResponseWriter{ResponseWriter: w}
+			ww := &StatusResponseWriter{ResponseWriter: w}
 
 			next.ServeHTTP(ww, r)
 

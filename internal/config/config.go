@@ -107,12 +107,28 @@ func (c *ClusterConfig) IsRemote() bool {
 	return c.APIServer != ""
 }
 
+// MetricsLabels controls optional high-cardinality labels on tokenreview metrics.
+type MetricsLabels struct {
+	Client bool `yaml:"client"` // Add client (payload token SA) label to kfa_tokenreview_requests_total
+}
+
+// MetricsSettings configures Prometheus metrics behavior.
+type MetricsSettings struct {
+	Labels MetricsLabels `yaml:"labels"`
+}
+
 type Config struct {
 	LogLevel          string                   `yaml:"log_level,omitempty"` // DEBUG, INFO, WARN, ERROR (default: INFO)
 	AuthorizedClients []string                 `yaml:"authorized_clients,omitempty"`
 	Renewal           *RenewalSettings         `yaml:"renewal,omitempty"`
 	Cache             *CacheSettings           `yaml:"cache,omitempty"`
+	Metrics           *MetricsSettings         `yaml:"metrics,omitempty"`
 	Clusters          map[string]ClusterConfig `yaml:"clusters"`
+}
+
+// ClientMetricsEnabled returns whether the client label is enabled on tokenreview metrics.
+func (c *Config) ClientMetricsEnabled() bool {
+	return c.Metrics != nil && c.Metrics.Labels.Client
 }
 
 // GetLogLevel returns the configured slog.Level, defaulting to INFO.
