@@ -69,7 +69,7 @@ clusters:
   # Remote cluster with private OIDC (requires credentials)
   cluster-b:
     issuer: "https://kubernetes.default.svc.cluster.local"
-    api_server: "https://192.168.1.100:6443"
+    api_server: "https://cluster-b.example.com:6443"
     ca_cert: "/etc/kube-federated-auth/certs/cluster-b-ca.crt"
     token_path: "/etc/kube-federated-auth/certs/cluster-b-token"
 ```
@@ -180,7 +180,7 @@ List configured clusters and their credential status.
     {
       "name": "cluster-b",
       "issuer": "https://kubernetes.default.svc.cluster.local",
-      "api_server": "https://192.168.1.100:6443",
+      "api_server": "https://cluster-b.example.com:6443",
       "token_status": {
         "expires_at": "2025-12-21T13:26:40Z",
         "expires_in": "167h50m4s",
