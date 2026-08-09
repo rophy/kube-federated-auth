@@ -39,14 +39,14 @@ func TestRecoverer_Panic(t *testing.T) {
 }
 
 func TestStatusResponseWriter_DefaultStatus(t *testing.T) {
-	w := &statusResponseWriter{ResponseWriter: httptest.NewRecorder()}
+	w := &StatusResponseWriter{ResponseWriter: httptest.NewRecorder()}
 	if w.Status() != http.StatusOK {
 		t.Errorf("default status = %d, want %d", w.Status(), http.StatusOK)
 	}
 }
 
 func TestStatusResponseWriter_CapturesStatus(t *testing.T) {
-	w := &statusResponseWriter{ResponseWriter: httptest.NewRecorder()}
+	w := &StatusResponseWriter{ResponseWriter: httptest.NewRecorder()}
 	w.WriteHeader(http.StatusNotFound)
 	if w.Status() != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Status(), http.StatusNotFound)

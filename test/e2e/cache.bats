@@ -55,5 +55,5 @@ setup() {
     logs=$(server_logs_since "$since")
     echo "# Server logs: $logs"
 
-    echo "$logs" | grep -q "cache hit"
+    echo "$logs" | grep -q "cache=hit"
 }

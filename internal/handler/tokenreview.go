@@ -19,6 +19,7 @@ import (
 	"github.com/rophy/kube-federated-auth/internal/cache"
 	"github.com/rophy/kube-federated-auth/internal/config"
 	"github.com/rophy/kube-federated-auth/internal/credentials"
+	"github.com/rophy/kube-federated-auth/internal/metrics"
 	mw "github.com/rophy/kube-federated-auth/internal/middleware"
 	"github.com/rophy/kube-federated-auth/internal/oidc"
 	"golang.org/x/sync/singleflight"
@@ -45,12 +46,18 @@ type TokenReviewHandler struct {
 	inflight          singleflight.Group
 	cacheRequestsTotal *prometheus.CounterVec // optional, nil-safe
 	cacheEntries       *prometheus.GaugeVec   // optional, nil-safe
+	metrics            *metrics.Metrics       // optional, nil-safe
 }
 
 // SetMetrics sets the optional Prometheus metrics for cache observability.
 func (h *TokenReviewHandler) SetMetrics(cacheRequestsTotal *prometheus.CounterVec, cacheEntries *prometheus.GaugeVec) {
 	h.cacheRequestsTotal = cacheRequestsTotal
 	h.cacheEntries = cacheEntries
+}
+
+// SetTokenReviewMetrics sets the Metrics instance for per-caller/client recording.
+func (h *TokenReviewHandler) SetTokenReviewMetrics(m *metrics.Metrics) {
+	h.metrics = m
 }
 
 func NewTokenReviewHandler(v TokenVerifier, cfg *config.Config, store *credentials.Store, sp ClusterStatusProvider) *TokenReviewHandler {
@@ -80,6 +87,19 @@ func NewTokenReviewHandler(v TokenVerifier, cfg *config.Config, store *credentia
 
 func (h *TokenReviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	if h.metrics != nil {
+		defer func() {
+			caller := mw.GetCallerIdentity(r.Context())
+			client := mw.GetClientIdentity(r.Context())
+			cluster := mw.GetClusterName(r.Context())
+			status := "200"
+			if sw, ok := w.(*mw.StatusResponseWriter); ok {
+				status = fmt.Sprintf("%d", sw.Status())
+			}
+			h.metrics.RecordTokenReview(caller, client, status, cluster)
+		}()
+	}
 
 	// Step 0: Authenticate the caller via their own SA token
 	if h.config != nil && len(h.config.AuthorizedClients) > 0 {
@@ -131,6 +151,7 @@ func (h *TokenReviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ns, sa := extractIdentity(claims)
 	clientIdentity := fmt.Sprintf("%s/%s/%s", cluster, ns, sa)
 	*r = *r.WithContext(mw.SetClientIdentity(r.Context(), clientIdentity))
+	*r = *r.WithContext(mw.SetClusterName(r.Context(), cluster))
 
 	// Step 1.5: Check cache before forwarding
 	cacheKey := cache.HashKey(cluster, tr.Spec.Token)

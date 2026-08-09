@@ -20,6 +20,11 @@ cache:
   negative_ttl: 30    # Cache TTL in seconds for unauthenticated results (default: 30)
   max_entries: 1000   # Max cached entries (default: 1000)
 
+# Metrics settings (optional)
+# metrics:
+#   labels:
+#     client: true  # Add client (payload token SA) label to kfa_tokenreview_requests_total (default: false)
+
 clusters:
   # EKS cluster (public OIDC endpoint)
   eks-prod:
