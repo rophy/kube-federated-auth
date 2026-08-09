@@ -37,7 +37,7 @@ clusters:
   # Remote cluster - auto-renewed because api_server is set
   remote-cluster:
     issuer: "https://kubernetes.default.svc.cluster.local"
-    api_server: "https://192.168.1.100:6443"
+    api_server: "https://remote-cluster.example.com:6443"
     ca_cert: "/etc/kube-federated-auth/certs/remote-ca.crt"
     token_path: "/etc/kube-federated-auth/certs/remote-token"
     cache:

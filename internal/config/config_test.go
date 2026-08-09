@@ -126,7 +126,7 @@ clusters:
     issuer: "https://oidc.example.com"
   cluster-b:
     issuer: "https://kubernetes.default.svc.cluster.local"
-    api_server: "https://192.168.1.100:6443"
+    api_server: "https://cluster-b.example.com:6443"
     ca_cert: "/path/to/ca.crt"
     token_path: "/path/to/token"
 `
@@ -163,7 +163,7 @@ clusters:
     issuer: "https://oidc.example.com"
   cluster-b:
     issuer: "https://oidc.other.com"
-    api_server: "https://192.168.1.100:6443"
+    api_server: "https://cluster-b.example.com:6443"
   cluster-c:
     issuer: "https://oidc.third.com"
 `

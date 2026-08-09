@@ -167,7 +167,7 @@ func TestClusters(t *testing.T) {
 	cfg := &config.Config{
 		Clusters: map[string]config.ClusterConfig{
 			"cluster-a": {Issuer: "https://a.example.com"},
-			"cluster-b": {Issuer: "https://b.example.com", APIServer: "https://192.168.1.100:6443"},
+			"cluster-b": {Issuer: "https://b.example.com", APIServer: "https://cluster-b.example.com:6443"},
 		},
 	}
 
@@ -194,8 +194,8 @@ func TestClusters(t *testing.T) {
 	// Verify cluster info includes issuer and api_server
 	for _, c := range resp.Clusters {
 		if c.Name == "cluster-b" {
-			if c.APIServer != "https://192.168.1.100:6443" {
-				t.Errorf("cluster-b api_server = %q, want %q", c.APIServer, "https://192.168.1.100:6443")
+			if c.APIServer != "https://cluster-b.example.com:6443" {
+				t.Errorf("cluster-b api_server = %q, want %q", c.APIServer, "https://cluster-b.example.com:6443")
 			}
 		}
 		if c.Issuer == "" {
