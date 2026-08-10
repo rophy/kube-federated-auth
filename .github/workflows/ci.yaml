@@ -43,6 +43,12 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Reject v-prefixed tags
+        if: startsWith(github.ref_name, 'v')
+        run: |
+          echo "::error::Tag '${{ github.ref_name }}' must not start with 'v'. Use '${GITHUB_REF_NAME#v}' instead."
+          exit 1
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
