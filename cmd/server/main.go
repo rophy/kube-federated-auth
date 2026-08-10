@@ -47,24 +47,36 @@ func main() {
 	srv := server.New(cfg, credStore, Version)
 
 	// Start credential renewal and handle shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	credStore.Start(ctx, srv.Verifier)
 
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		slog.Info("shutting down")
-		cancel()
-	}()
-
-	addr := ":" + *port
-	if err := http.ListenAndServe(addr, srv.Handler); err != nil {
+	if err := listenAndServe(ctx, ":"+*port, srv.Handler); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func listenAndServe(ctx context.Context, addr string, handler http.Handler) error {
+	httpSrv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		slog.Info("shutting down")
+		httpSrv.Shutdown(context.Background())
+		close(shutdownDone)
+	}()
+
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	<-shutdownDone
+	return nil
 }
 
 func getEnv(key, fallback string) string {
