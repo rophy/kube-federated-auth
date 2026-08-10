@@ -1,0 +1,42 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install Kind
+        run: go install sigs.k8s.io/kind@v0.27.0
+
+      - name: Install Skaffold
+        run: |
+          curl -fLo skaffold https://storage.googleapis.com/skaffold/releases/v2.16.0/skaffold-linux-amd64
+          curl -fLo skaffold.sha256 https://storage.googleapis.com/skaffold/releases/v2.16.0/skaffold-linux-amd64.sha256
+          sed -i 's/skaffold-linux-amd64/skaffold/' skaffold.sha256
+          sha256sum -c skaffold.sha256
+          chmod +x skaffold
+          sudo mv skaffold /usr/local/bin/
+
+      - name: Install bats
+        run: sudo apt-get install -y bats
+
+      - name: Deploy clusters
+        run: make deploy
+
+      - name: Run e2e tests
+        run: bats test/e2e/
