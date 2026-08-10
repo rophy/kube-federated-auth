@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rophy/kube-federated-auth/internal/config"
 	"github.com/rophy/kube-federated-auth/internal/credentials"
@@ -68,7 +69,12 @@ func listenAndServe(ctx context.Context, addr string, handler http.Handler) erro
 	go func() {
 		<-ctx.Done()
 		slog.Info("shutting down")
-		httpSrv.Shutdown(context.Background())
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer shutdownCancel()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("shutdown deadline exceeded, forcing close", "error", err)
+			httpSrv.Close()
+		}
 		close(shutdownDone)
 	}()
 

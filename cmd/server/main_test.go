@@ -20,6 +20,20 @@ func freePort(t *testing.T) string {
 	return addr
 }
 
+func waitForReady(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(fmt.Sprintf("http://%s/", addr))
+		if err == nil {
+			resp.Body.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("server at %s not ready within 2s", addr)
+}
+
 func TestListenAndServe_GracefulShutdown(t *testing.T) {
 	addr := freePort(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,18 +46,8 @@ func TestListenAndServe_GracefulShutdown(t *testing.T) {
 		errCh <- listenAndServe(ctx, addr, handler)
 	}()
 
-	// Wait for the server to start accepting connections
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(fmt.Sprintf("http://%s/", addr))
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForReady(t, addr)
 
-	// Verify server responds
 	resp, err := http.Get(fmt.Sprintf("http://%s/", addr))
 	if err != nil {
 		t.Fatalf("server not responding: %v", err)
@@ -53,7 +57,6 @@ func TestListenAndServe_GracefulShutdown(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Cancel context to trigger graceful shutdown
 	cancel()
 
 	select {
@@ -85,18 +88,8 @@ func TestListenAndServe_DrainsInFlightRequests(t *testing.T) {
 		errCh <- listenAndServe(ctx, addr, handler)
 	}()
 
-	// Wait for server to be ready
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(fmt.Sprintf("http://%s/", addr))
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForReady(t, addr)
 
-	// Start an in-flight request
 	slowDone := make(chan int, 1)
 	go func() {
 		resp, err := http.Get(fmt.Sprintf("http://%s/slow", addr))
@@ -108,21 +101,17 @@ func TestListenAndServe_DrainsInFlightRequests(t *testing.T) {
 		slowDone <- resp.StatusCode
 	}()
 
-	// Wait for the slow request to be in-flight, then trigger shutdown
 	<-reqStarted
 	cancel()
 
-	// Server should NOT have exited yet — the slow request is still in-flight
 	select {
 	case <-errCh:
 		t.Fatal("server exited before in-flight request completed")
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	// Let the slow request finish
 	close(reqFinish)
 
-	// The in-flight request should complete successfully
 	select {
 	case status := <-slowDone:
 		if status != http.StatusOK {
@@ -132,7 +121,6 @@ func TestListenAndServe_DrainsInFlightRequests(t *testing.T) {
 		t.Fatal("in-flight request did not complete")
 	}
 
-	// Now the server should exit
 	select {
 	case err := <-errCh:
 		if err != nil {
