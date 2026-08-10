@@ -27,7 +27,8 @@ jobs:
         run: |
           curl -fLo skaffold https://storage.googleapis.com/skaffold/releases/v2.16.0/skaffold-linux-amd64
           curl -fLo skaffold.sha256 https://storage.googleapis.com/skaffold/releases/v2.16.0/skaffold-linux-amd64.sha256
-          echo "$(cat skaffold.sha256)  skaffold" | sha256sum -c
+          sed -i 's/skaffold-linux-amd64/skaffold/' skaffold.sha256
+          sha256sum -c skaffold.sha256
           chmod +x skaffold
           sudo mv skaffold /usr/local/bin/
 
