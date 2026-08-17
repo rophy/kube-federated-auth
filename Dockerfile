@@ -19,4 +19,4 @@ EXPOSE 8080
 
 USER 65534:65534
 
-CMD ["kube-federated-auth"]
+ENTRYPOINT ["kube-federated-auth"]
