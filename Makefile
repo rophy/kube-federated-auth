@@ -40,8 +40,11 @@ test: test-unit test-e2e ## Run all tests (unit + e2e)
 test-unit: ## Run unit tests
 	go test -v ./internal/...
 
-test-e2e: ## Run e2e tests
-	bats test/e2e/
+test-e2e: ## Run e2e tests (excludes LLM tests)
+	bats --filter-tags '!llm' test/e2e/
+
+test-e2e-llm: ## Run LLM-based e2e tests (requires claude CLI)
+	bats --filter-tags 'llm' test/e2e/
 
 test-perf: ## Run k6 performance tests
 	bash test/perf/run.sh

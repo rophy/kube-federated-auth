@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,7 +36,7 @@ func main() {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		if _, statErr := os.Stat(*configPath); statErr != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "Config file not found: %s\n\n", *configPath)
 			fmt.Fprintf(os.Stderr, "Usage:\n")
 			fmt.Fprintf(os.Stderr, "  kube-federated-auth [flags]\n\n")

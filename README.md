@@ -54,7 +54,20 @@ docker run -v $(pwd)/config:/etc/kube-federated-auth ghcr.io/rophy/kube-federate
 ```
 ### Kubernetes Deployment
 
-Complete example for deploying to `cluster-a` (server cluster) with one remote `cluster-b`. Apply each section to the appropriate cluster context.
+Complete example for deploying to `cluster-a` (server cluster) with one remote `cluster-b`. Apply with `-n kube-federated-auth` — create the namespace first on both clusters:
+
+```bash
+kubectl create namespace kube-federated-auth --context kind-cluster-a
+kubectl create namespace kube-federated-auth --context kind-cluster-b
+```
+
+You also need a ConfigMap with your `clusters.yaml` (see [Configuration](#configuration) below):
+
+```bash
+kubectl create configmap kube-federated-auth \
+  --from-file=clusters.yaml=config/clusters.yaml \
+  -n kube-federated-auth --context kind-cluster-a
+```
 
 #### Server cluster (cluster-a)
 
