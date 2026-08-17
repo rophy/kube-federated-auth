@@ -39,8 +39,8 @@ Two fresh Kind clusters are available:
 
 Your task:
 1. Figure out what this container image does and how to use it
-2. Deploy it to the clusters
-3. Verify it works by making a successful API request
+2. Deploy it to the clusters with authorized_clients configured
+3. Verify it works by making a successful API request (with caller authentication)
 4. Write the final verification response to ${RESULT_FILE}
 
 Important:
@@ -58,9 +58,36 @@ PROMPT_EOF
         --allowedTools "Bash Read Write" \
         2>&1 | tee "${CLAUDE_LOG}"
 
-    # Verify result file exists
+    # Verify result file exists and AI claims success
     [ -f "$RESULT_FILE" ]
-
-    # Verify authenticated: true appears in result
     grep -qi 'authenticated.*true' "$RESULT_FILE"
+
+    # Independent verification
+    local token
+    token=$(kubectl create token default --context kind-cluster-b -n default --duration=10m)
+    local caller_token
+    caller_token=$(kubectl create token kube-federated-auth --context kind-cluster-a -n kube-federated-auth --duration=10m)
+
+    # Verify authorized_clients is enforced: request without caller token should fail
+    local no_auth_result
+    no_auth_result=$(kubectl run curl-noauth --rm -i --restart=Never \
+        --context kind-cluster-a -n kube-federated-auth \
+        --image=curlimages/curl -- \
+        curl -s -X POST http://kube-federated-auth:8080/apis/authentication.k8s.io/v1/tokenreviews \
+        -H "Content-Type: application/json" \
+        -d "{\"apiVersion\":\"authentication.k8s.io/v1\",\"kind\":\"TokenReview\",\"spec\":{\"token\":\"${token}\"}}")
+    echo "# No-auth result: $no_auth_result"
+    echo "$no_auth_result" | grep -q '"error"'
+
+    # Verify authenticated TokenReview with caller token succeeds
+    local result
+    result=$(kubectl run curl-auth --rm -i --restart=Never \
+        --context kind-cluster-a -n kube-federated-auth \
+        --image=curlimages/curl -- \
+        curl -s -X POST http://kube-federated-auth:8080/apis/authentication.k8s.io/v1/tokenreviews \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${caller_token}" \
+        -d "{\"apiVersion\":\"authentication.k8s.io/v1\",\"kind\":\"TokenReview\",\"spec\":{\"token\":\"${token}\"}}")
+    echo "# Auth result: $result"
+    echo "$result" | grep -q '"authenticated":true\|"authenticated": true'
 }
