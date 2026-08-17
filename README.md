@@ -8,16 +8,22 @@ Validate ServiceAccount tokens from multiple Kubernetes clusters using their OID
 
 ## How It Works
 
+There are three roles in the flow:
+
+- **Client workload** — a workload on a remote cluster that presents its SA token to authenticate
+- **Caller service** — your service (e.g. an API gateway) that receives the token and needs to verify it. This is the service that calls kube-federated-auth.
+- **kube-federated-auth** — verifies the token by detecting the source cluster and forwarding a TokenReview
+
 ```mermaid
 flowchart LR
-    subgraph cluster-a["cluster-a (service)"]
-        svc[my-svc]
+    subgraph cluster-a["cluster-a"]
+        svc["my-svc\n(caller)"]
         kfa[kube-federated-auth]
         svc -->|2. TokenReview| kfa
     end
 
-    subgraph cluster-b["cluster-b (client)"]
-        client[client]
+    subgraph cluster-b["cluster-b"]
+        client["client workload"]
         oidc[OIDC endpoint]
     end
 
@@ -26,8 +32,8 @@ flowchart LR
     kfa -->|4. forward TokenReview| cluster-b
 ```
 
-1. Client workload sends its ServiceAccount token to your service
-2. Your service calls kube-federated-auth using standard Kubernetes [TokenReview API](https://kubernetes.io/docs/reference/kubernetes-api/authentication-resources/token-review-v1/)
+1. A **client workload** sends its ServiceAccount token to your service
+2. Your **caller service** calls kube-federated-auth using standard Kubernetes [TokenReview API](https://kubernetes.io/docs/reference/kubernetes-api/authentication-resources/token-review-v1/)
 3. kube-federated-auth detects the source cluster by verifying the JWT signature against cached JWKS (local, no token leakage)
 4. kube-federated-auth forwards the TokenReview to the detected cluster for authoritative validation (revocation checks, bound object validation)
 
@@ -51,10 +57,14 @@ docker run -v $(pwd)/config:/etc/kube-federated-auth ghcr.io/rophy/kube-federate
 
 ```yaml
 # config/clusters.yaml
+# Caller services allowed to use the kube-federated-auth API (see "Caller
+# Authentication" below). These are your services (e.g. my-svc in the diagram
+# above) — not the client workloads whose tokens are being reviewed.
+# Format: {cluster}/{namespace}/{serviceaccount}, * as wildcard.
 authorized_clients:
-  - "cluster-a/kube-federated-auth/test-client"  # exact match
-  - "*/default/my-app"                            # any cluster
-  - "cluster-b/*/*"                               # any SA in cluster-b
+  - "cluster-a/kube-federated-auth/my-svc"       # exact caller
+  - "cluster-a/*/my-app"                          # my-app in any namespace
+  - "cluster-a/kube-federated-auth/*"             # any caller in namespace
 
 renewal:
   interval: "1h"          # How often to check for renewal
@@ -76,18 +86,26 @@ clusters:
 
 ## Caller Authentication
 
-By default, the TokenReview endpoint is open to any caller. When `authorized_clients` is configured, callers are required to authenticate by including their own ServiceAccount token in the `Authorization` header. Each entry uses `{cluster}/{namespace}/{serviceaccount}` format, with `*` as a wildcard in any segment.
+`authorized_clients` restricts which **caller services** (like `my-svc` in the diagram) can use the kube-federated-auth API. It does **not** control which client workloads' tokens can be reviewed — any token from a configured cluster can be reviewed regardless of this setting.
+
+By default, the TokenReview endpoint is open to any caller. When `authorized_clients` is configured, caller services must include their own ServiceAccount token in the `Authorization` header:
 
 ```bash
+# The caller (my-svc) authenticates itself via the Authorization header,
+# and asks kube-federated-auth to review a client workload's token in the body.
 curl -X POST http://kube-federated-auth:8080/apis/authentication.k8s.io/v1/tokenreviews \
-  -H "Authorization: Bearer <caller-sa-token>" \
+  -H "Authorization: Bearer <caller-service-sa-token>" \
   -H "Content-Type: application/json" \
-  -d '{ ... }'
+  -d '{ "spec": { "token": "<client-workload-token>" } }'
 ```
 
-The caller's token is verified via JWKS (same as regular token detection) and checked against the whitelist. If omitted or unauthorized, the request is rejected with `401` or `403`.
+The caller's token is verified via JWKS (same as regular token detection) and checked against the `authorized_clients` list. If omitted or unauthorized, the request is rejected with `401` or `403`.
 
 ## RBAC Requirements
+
+### Caller services
+
+Caller services (e.g. `my-svc`) do **not** need any special RBAC. They only need a ServiceAccount — their token is verified by kube-federated-auth via JWKS, not through the Kubernetes API.
 
 ### Server cluster (where kube-federated-auth runs)
 
@@ -118,14 +136,18 @@ Standard Kubernetes TokenReview API. The source cluster is automatically detecte
 ```bash
 curl -X POST http://kube-federated-auth:8080/apis/authentication.k8s.io/v1/tokenreviews \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <caller-service-sa-token>" \
   -d '{
     "apiVersion": "authentication.k8s.io/v1",
     "kind": "TokenReview",
     "spec": {
-      "token": "<sa-token>"
+      "token": "<client-workload-token>"
     }
   }'
 ```
+
+- `Authorization` header — the caller service's own SA token (required when `authorized_clients` is configured; omit if not)
+- `spec.token` — the client workload's token to review
 
 **Success response:**
 
@@ -218,6 +240,45 @@ make test-perf     # k6 performance tests (requires Kind clusters)
 ```
 
 See [test/README.md](test/README.md) for details on each test suite.
+
+## Troubleshooting
+
+### `401 caller token missing identity claims`
+
+The caller service's token was verified via JWKS but doesn't contain the `kubernetes.io` claims (namespace and service account name). This typically means the caller is using a **legacy ServiceAccount token** (static Secret-based) instead of a **projected ServiceAccount token** (bound, time-limited).
+
+**Fix:** Ensure the caller pod uses a projected token. Most clusters create these by default (Kubernetes 1.21+). If the caller's token comes from a Secret of type `kubernetes.io/service-account-token`, it won't have the required claims — use a projected volume or `kubectl create token <sa-name>` instead.
+
+### `401 caller token not valid for any configured cluster`
+
+The caller's SA token could not be verified against any cluster's JWKS. Common causes:
+
+- The caller's cluster is not listed in `clusters:` in the config
+- The cluster's `issuer` doesn't match the token's `iss` claim
+- The JWKS endpoint is unreachable (network policy, firewall, or wrong `api_server` URL)
+
+### `403 caller is not authorized`
+
+The caller's token was verified and identity extracted, but it doesn't match any entry in `authorized_clients`. The log will show the caller's identity as `{cluster}/{namespace}/{serviceaccount}` — check it matches one of your whitelist entries.
+
+### `token not valid for any configured cluster` (for the reviewed token)
+
+The client workload's token (in `spec.token`) couldn't be matched to any configured cluster. Check:
+
+- The client workload's cluster is listed in `clusters:` config
+- The `issuer` matches the token's `iss` claim (run `kubectl get --raw /.well-known/openid-configuration` on the client's cluster to find the issuer)
+
+### `401 Authorization header required`
+
+You have `authorized_clients` configured but the caller didn't send an `Authorization: Bearer <token>` header. Either add the header, or remove `authorized_clients` from the config if you don't need caller authentication.
+
+### Setup checklist
+
+Three things to configure correctly:
+
+1. **`clusters:`** — each remote cluster needs `issuer` (must match exactly). Private clusters also need `api_server`, `ca_cert`, and `token_path`.
+2. **`authorized_clients:`** (optional) — lists caller services allowed to use the API, in `{cluster}/{namespace}/{serviceaccount}` format. Omit to allow any caller.
+3. **RBAC** — kube-federated-auth's own SA needs `tokenreviews` (ClusterRole) and `secrets` (namespaced Role). Remote cluster SAs need `tokenreviews` (ClusterRole) and `serviceaccounts/token` (namespaced Role).
 
 ## License
 
