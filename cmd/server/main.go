@@ -27,9 +27,9 @@ func main() {
 		fmt.Fprint(os.Stdout, kfadocs.README)
 	}
 
-	configPath := flag.String("config", getEnv("CONFIG_PATH", "config/clusters.yaml"), "path to cluster config file")
-	port := flag.String("port", getEnv("PORT", "8080"), "server port")
-	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "kube-federated-auth"), "name of credential secret")
+	configPath := flag.String("config", getEnv("CONFIG_PATH", "config/clusters.yaml"), "path to cluster config file (env: CONFIG_PATH)")
+	port := flag.String("port", getEnv("PORT", "8080"), "server port (env: PORT)")
+	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "kube-federated-auth"), "name of credential secret (env: SECRET_NAME)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)

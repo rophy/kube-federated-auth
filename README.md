@@ -34,7 +34,7 @@ flowchart LR
 
 1. A **client workload** sends its ServiceAccount token to your service
 2. Your **caller service** calls kube-federated-auth using standard Kubernetes [TokenReview API](https://kubernetes.io/docs/reference/kubernetes-api/authentication-resources/token-review-v1/)
-3. kube-federated-auth detects the source cluster by verifying the JWT signature against cached JWKS (local, no token leakage)
+3. kube-federated-auth detects the source cluster by matching the JWT signature against each cluster's JWKS keys (local, no token leakage). This works even when multiple clusters share the same issuer — each cluster has unique signing keys.
 4. kube-federated-auth forwards the TokenReview to the detected cluster for authoritative validation (revocation checks, bound object validation)
 
 ## Installation
@@ -52,6 +52,187 @@ go run ./cmd/server --config=config/clusters.yaml
 # Or with Docker
 docker run -v $(pwd)/config:/etc/kube-federated-auth ghcr.io/rophy/kube-federated-auth
 ```
+### Kubernetes Deployment
+
+Complete example for deploying to `cluster-a` (server cluster) with one remote `cluster-b`. Apply each section to the appropriate cluster context.
+
+#### Server cluster (cluster-a)
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-federated-auth
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tokenreview-creator
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-federated-auth-tokenreview
+subjects:
+- kind: ServiceAccount
+  name: kube-federated-auth
+  namespace: kube-federated-auth
+roleRef:
+  kind: ClusterRole
+  name: tokenreview-creator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-federated-auth
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-federated-auth
+subjects:
+- kind: ServiceAccount
+  name: kube-federated-auth
+roleRef:
+  kind: Role
+  name: kube-federated-auth
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-federated-auth
+spec:
+  selector:
+    app: kube-federated-auth
+  ports:
+  - port: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-federated-auth
+spec:
+  selector:
+    matchLabels:
+      app: kube-federated-auth
+  template:
+    metadata:
+      labels:
+        app: kube-federated-auth
+    spec:
+      serviceAccountName: kube-federated-auth
+      containers:
+      - name: kube-federated-auth
+        image: ghcr.io/rophy/kube-federated-auth:latest
+        env:
+        - name: CONFIG_PATH
+          value: /etc/kfa/config/clusters.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/kfa/config
+        - name: cluster-tokens
+          mountPath: /etc/kfa/tokens
+        - name: cluster-ca-certs
+          mountPath: /etc/kfa/ca-certs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+      volumes:
+      - name: config
+        configMap:
+          name: kube-federated-auth
+      - name: cluster-tokens
+        secret:
+          secretName: kube-federated-auth-bootstrap
+          optional: true
+      - name: cluster-ca-certs
+        configMap:
+          name: kube-federated-auth-certs
+          optional: true
+```
+
+#### Remote cluster (cluster-b)
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-federated-auth-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tokenreview-creator
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-federated-auth-reader-tokenreview
+subjects:
+- kind: ServiceAccount
+  name: kube-federated-auth-reader
+  namespace: kube-federated-auth
+roleRef:
+  kind: ClusterRole
+  name: tokenreview-creator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: token-creator
+rules:
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-federated-auth-reader-token-creator
+subjects:
+- kind: ServiceAccount
+  name: kube-federated-auth-reader
+roleRef:
+  kind: Role
+  name: token-creator
+  apiGroup: rbac.authorization.k8s.io
+```
+
+#### Bootstrap token
+
+Create on the remote cluster and load into the server cluster as a Secret. The token file must not contain a trailing newline.
+
+```bash
+printf '%s' "$(kubectl create token kube-federated-auth-reader \
+  -n kube-federated-auth --duration=8760h \
+  --context kind-cluster-b)" > bootstrap-token-cluster-b
+
+kubectl create secret generic kube-federated-auth-bootstrap \
+  --from-file=cluster-b=bootstrap-token-cluster-b \
+  --context kind-cluster-a -n kube-federated-auth
+```
+
+Set `token_path` and `ca_cert` in the config to match mount paths (e.g. `/etc/kfa/tokens/cluster-b`, `/etc/kfa/ca-certs/cluster-b-ca.crt`).
 
 ## Configuration
 
@@ -76,17 +257,26 @@ clusters:
   eks-prod:
     issuer: "https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE"
 
+  # Local/server cluster (needed if using authorized_clients or for self-review).
+  # When running in-cluster, use the mounted CA cert for OIDC discovery.
+  cluster-a:
+    issuer: "https://kubernetes.default.svc.cluster.local"
+    api_server: "https://kubernetes.default.svc.cluster.local"
+    ca_cert: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
   # Remote cluster with private OIDC (requires credentials)
   cluster-b:
     issuer: "https://kubernetes.default.svc.cluster.local"
     api_server: "https://cluster-b.example.com:6443"
-    ca_cert: "/etc/kube-federated-auth/certs/cluster-b-ca.crt"
-    token_path: "/etc/kube-federated-auth/certs/cluster-b-token"
+    ca_cert: "/etc/kfa/ca-certs/cluster-b-ca.crt"
+    token_path: "/etc/kfa/tokens/cluster-b"
 ```
 
 ## Caller Authentication
 
 `authorized_clients` restricts which **caller services** (like `my-svc` in the diagram) can use the kube-federated-auth API. It does **not** control which client workloads' tokens can be reviewed — any token from a configured cluster can be reviewed regardless of this setting.
+
+The `{cluster}` in the format refers to the key name in the `clusters:` config map (e.g. `cluster-b`), not the Kubernetes cluster name. For the local/server cluster, add it to `clusters:` with its own issuer so its name can be referenced here.
 
 By default, the TokenReview endpoint is open to any caller. When `authorized_clients` is configured, caller services must include their own ServiceAccount token in the `Authorization` header:
 
@@ -101,29 +291,9 @@ curl -X POST http://kube-federated-auth:8080/apis/authentication.k8s.io/v1/token
 
 The caller's token is verified via JWKS (same as regular token detection) and checked against the `authorized_clients` list. If omitted or unauthorized, the request is rejected with `401` or `403`.
 
-## RBAC Requirements
+## RBAC and Credentials
 
-### Caller services
-
-Caller services (e.g. `my-svc`) do **not** need any special RBAC. They only need a ServiceAccount — their token is verified by kube-federated-auth via JWKS, not through the Kubernetes API.
-
-### Server cluster (where kube-federated-auth runs)
-
-The server's ServiceAccount needs:
-
-| Resource | Verbs | Scope | Reason |
-|----------|-------|-------|--------|
-| `tokenreviews` | `create` | ClusterRole | Forward TokenReview requests to the local API server |
-| `secrets` | `get`, `create`, `update` | Role (namespaced) | Persist renewed credentials for remote clusters |
-
-### Remote clusters (whose tokens are validated)
-
-A ServiceAccount on each remote cluster needs:
-
-| Resource | Verbs | Scope | Reason |
-|----------|-------|-------|--------|
-| `tokenreviews` | `create` | ClusterRole | Allow the server to forward TokenReview requests |
-| `serviceaccounts/token` | `create` | Role (namespaced) | Allow the server to request tokens for credential renewal |
+Caller services (e.g. `my-svc`) do **not** need any special RBAC — their token is verified via JWKS, not through the Kubernetes API. See the [Kubernetes Deployment](#kubernetes-deployment) section above for complete RBAC manifests for both server and remote clusters.
 
 The server authenticates to remote clusters using a bootstrap token (provided via `token_path` in config). On first startup, it reads this bootstrap token and uses it to request a new token via the remote cluster's TokenRequest API. The renewed token is persisted to a Kubernetes Secret, and subsequent renewals use the stored token — the bootstrap token file is only read again if the Secret is missing or empty for that cluster. CA certificates are not renewed — they are read once from `ca_cert` at startup.
 
@@ -215,6 +385,8 @@ List configured clusters and their credential status.
 
 ### GET /health
 
+Returns `{"status":"ok"}`. Use as a Kubernetes liveness and readiness probe.
+
 ```json
 {"status":"ok"}
 ```
@@ -229,6 +401,8 @@ List configured clusters and their credential status.
 | `PORT` | `8080` | Server port |
 | `NAMESPACE` | `kube-federated-auth` | Namespace for credential secret |
 | `SECRET_NAME` | `kube-federated-auth` | Secret name for credentials |
+
+Environment variables provide defaults; CLI flags (`-config`, `-port`, `-secret-name`) override them when both are set.
 
 ## Testing
 
@@ -276,9 +450,9 @@ You have `authorized_clients` configured but the caller didn't send an `Authoriz
 
 Three things to configure correctly:
 
-1. **`clusters:`** — each remote cluster needs `issuer` (must match exactly). Private clusters also need `api_server`, `ca_cert`, and `token_path`.
+1. **`clusters:`** — each remote cluster needs `issuer` (must match exactly). Private clusters also need `api_server`, `ca_cert`, and `token_path`. Include the local cluster too if using `authorized_clients` — set `ca_cert` to `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`.
 2. **`authorized_clients:`** (optional) — lists caller services allowed to use the API, in `{cluster}/{namespace}/{serviceaccount}` format. Omit to allow any caller.
-3. **RBAC** — kube-federated-auth's own SA needs `tokenreviews` (ClusterRole) and `secrets` (namespaced Role). Remote cluster SAs need `tokenreviews` (ClusterRole) and `serviceaccounts/token` (namespaced Role).
+3. **RBAC** — see [Kubernetes Deployment](#kubernetes-deployment) for complete manifests.
 
 ## License
 
