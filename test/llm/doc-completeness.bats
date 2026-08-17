@@ -1,8 +1,7 @@
 #!/usr/bin/env bats
 
-# bats test_tags=llm
 # Requires: claude CLI, two Kind clusters (make kind)
-# Run: make test-e2e-llm
+# Run: make test-llm
 
 setup_file() {
     export IMAGE="${IMAGE:-ghcr.io/rophy/kube-federated-auth:latest}"
@@ -15,8 +14,13 @@ setup_file() {
     export CLAUDE_LOG="${LOG_DIR}/claude-${TIMESTAMP}.log"
 
     # Clean up any existing deployment
-    kubectl delete namespace kube-federated-auth --context kind-cluster-a --ignore-not-found
-    kubectl delete namespace kube-federated-auth --context kind-cluster-b --ignore-not-found
+    # Clean up namespaced and cluster-scoped resources from previous runs.
+    # The AI creates ClusterRoles/Bindings that survive namespace deletion.
+    for ctx in kind-cluster-a kind-cluster-b; do
+        kubectl delete namespace kube-federated-auth --context "$ctx" --ignore-not-found
+        kubectl delete clusterrole tokenreview-creator --context "$ctx" --ignore-not-found 2>/dev/null || true
+        kubectl delete clusterrolebinding kube-federated-auth-tokenreview kube-federated-auth-reader-tokenreview --context "$ctx" --ignore-not-found 2>/dev/null || true
+    done
 
     # Ensure image is available
     if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -24,7 +28,6 @@ setup_file() {
     fi
 }
 
-# bats test_tags=llm
 @test "AI can deploy from container image alone" {
     local PROMPT
     PROMPT="$(cat <<PROMPT_EOF

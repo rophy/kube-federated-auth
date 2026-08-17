@@ -1,3 +1,3 @@
 skaffold.env
 /proxy
-test/e2e/logs/
+test/llm/logs/
