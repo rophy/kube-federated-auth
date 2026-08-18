@@ -246,7 +246,7 @@ Create a bootstrap token and extract the CA certificate from the remote cluster,
 ```bash
 # Bootstrap token (no trailing newline)
 printf '%s' "$(kubectl create token kube-federated-auth-reader \
-  -n kube-federated-auth --duration=8760h \
+  -n kube-federated-auth --duration=168h \
   --context kind-cluster-b)" > bootstrap-token-cluster-b
 
 kubectl create secret generic kube-federated-auth-bootstrap \
