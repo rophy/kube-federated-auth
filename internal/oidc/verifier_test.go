@@ -2,16 +2,26 @@ package oidc
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/rophy/kube-federated-auth/internal/config"
 	"github.com/rophy/kube-federated-auth/internal/credentials"
 )
@@ -368,4 +378,411 @@ func TestClearTokenEnablesFallback(t *testing.T) {
 func makeJWTHeader(header map[string]any) string {
 	b, _ := json.Marshal(header)
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func newSigningKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	return key
+}
+
+func jwksJSON(t *testing.T, key *rsa.PrivateKey, kid string) string {
+	t.Helper()
+	n := base64.RawURLEncoding.EncodeToString(key.N.Bytes())
+	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())
+	return fmt.Sprintf(`{"keys":[{"kty":"RSA","alg":"RS256","use":"sig","kid":%q,"n":%q,"e":%q}]}`, kid, n, e)
+}
+
+func signJWT(t *testing.T, key *rsa.PrivateKey, kid string, claims map[string]any) string {
+	t.Helper()
+	header := makeJWTHeader(map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid})
+	payloadBytes, _ := json.Marshal(claims)
+	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
+	signingInput := header + "." + payload
+	sum := sha256.Sum256([]byte(signingInput))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+func newOIDCTestServer(t *testing.T, key *rsa.PrivateKey, kid string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			fmt.Fprintf(w, `{"issuer":"https://a.example.com","jwks_uri":"https://%s/openid/v1/jwks"}`, r.Host)
+		case "/openid/v1/jwks":
+			fmt.Fprint(w, jwksJSON(t, key, kid))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestVerifySuccess(t *testing.T) {
+	key := newSigningKey(t)
+	srv := newOIDCTestServer(t, key, "kid-1")
+
+	cfg := &config.Config{
+		Clusters: map[string]config.ClusterConfig{
+			"cluster-a": {Issuer: "https://a.example.com", APIServer: srv.URL},
+		},
+	}
+	mgr := NewVerifierManager(cfg, nil)
+	mgr.testHTTPClients = map[string]*http.Client{"cluster-a": srv.Client()}
+
+	token := signJWT(t, key, "kid-1", map[string]any{
+		"iss": "https://a.example.com",
+		"sub": "system:serviceaccount:default:app",
+		"aud": []string{"api"},
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Add(-time.Minute).Unix(),
+		"nbf": time.Now().Add(-time.Minute).Unix(),
+		"kubernetes.io": map[string]any{
+			"namespace": "default",
+		},
+	})
+
+	claims, err := mgr.Verify(context.Background(), "cluster-a", token)
+	if err != nil {
+		t.Fatalf("Verify() error: %v", err)
+	}
+	if claims.Cluster != "cluster-a" {
+		t.Errorf("Cluster = %q, want cluster-a", claims.Cluster)
+	}
+	if claims.Subject != "system:serviceaccount:default:app" {
+		t.Errorf("Subject = %q", claims.Subject)
+	}
+	if claims.Issuer != "https://a.example.com" {
+		t.Errorf("Issuer = %q", claims.Issuer)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != "api" {
+		t.Errorf("Audience = %v", claims.Audience)
+	}
+	if claims.Kubernetes["namespace"] != "default" {
+		t.Errorf("Kubernetes = %v", claims.Kubernetes)
+	}
+	if mgr.kidToCluster["kid-1"] != "cluster-a" {
+		t.Error("expected kid-1 learned for cluster-a")
+	}
+
+	// Second call exercises the cached-verifier path
+	if _, err := mgr.Verify(context.Background(), "cluster-a", token); err != nil {
+		t.Fatalf("second Verify() error: %v", err)
+	}
+}
+
+func TestVerifyExpiredToken(t *testing.T) {
+	key := newSigningKey(t)
+	srv := newOIDCTestServer(t, key, "kid-1")
+
+	cfg := &config.Config{
+		Clusters: map[string]config.ClusterConfig{
+			"cluster-a": {Issuer: "https://a.example.com", APIServer: srv.URL},
+		},
+	}
+	mgr := NewVerifierManager(cfg, nil)
+	mgr.testHTTPClients = map[string]*http.Client{"cluster-a": srv.Client()}
+
+	token := signJWT(t, key, "kid-1", map[string]any{
+		"iss": "https://a.example.com",
+		"sub": "expired",
+		"exp": time.Now().Add(-time.Hour).Unix(),
+	})
+
+	_, err := mgr.Verify(context.Background(), "cluster-a", token)
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("Verify() error = %v, want expired error", err)
+	}
+}
+
+func TestVerifyBadSignature(t *testing.T) {
+	key := newSigningKey(t)
+	other := newSigningKey(t)
+	srv := newOIDCTestServer(t, key, "kid-1")
+
+	cfg := &config.Config{
+		Clusters: map[string]config.ClusterConfig{
+			"cluster-a": {Issuer: "https://a.example.com", APIServer: srv.URL},
+		},
+	}
+	mgr := NewVerifierManager(cfg, nil)
+	mgr.testHTTPClients = map[string]*http.Client{"cluster-a": srv.Client()}
+
+	token := signJWT(t, other, "kid-1", map[string]any{"iss": "https://a.example.com", "sub": "x"})
+
+	_, err := mgr.Verify(context.Background(), "cluster-a", token)
+	if err == nil || !strings.Contains(err.Error(), "verifying token") {
+		t.Fatalf("Verify() error = %v, want verification failure", err)
+	}
+}
+
+func TestVerifyUnknownCluster(t *testing.T) {
+	mgr := NewVerifierManager(&config.Config{Clusters: map[string]config.ClusterConfig{}}, nil)
+	_, err := mgr.Verify(context.Background(), "nope", "token")
+	if err == nil || !strings.Contains(err.Error(), "cluster not found") {
+		t.Fatalf("Verify() error = %v, want cluster not found", err)
+	}
+}
+
+func TestSetMetricsTracksDegradedState(t *testing.T) {
+	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_degraded"}, []string{"cluster"})
+
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failing.Close()
+
+	cfg := &config.Config{
+		Clusters: map[string]config.ClusterConfig{
+			"cluster-a": {Issuer: "https://a.example.com", APIServer: failing.URL},
+		},
+	}
+	mgr := NewVerifierManager(cfg, nil)
+	mgr.SetMetrics(gauge)
+	mgr.testHTTPClients = map[string]*http.Client{"cluster-a": failing.Client()}
+
+	mgr.WarmUp(context.Background())
+
+	if v := gaugeValue(t, gauge, "cluster-a"); v != 1 {
+		t.Errorf("degraded gauge = %v, want 1", v)
+	}
+
+	key := newSigningKey(t)
+	good := newOIDCTestServer(t, key, "kid-1")
+	cfg.Clusters["cluster-a"] = config.ClusterConfig{Issuer: "https://a.example.com", APIServer: good.URL}
+	mgr.testHTTPClients["cluster-a"] = good.Client()
+
+	mgr.WarmUp(context.Background())
+
+	if v := gaugeValue(t, gauge, "cluster-a"); v != 0 {
+		t.Errorf("degraded gauge = %v, want 0 after recovery", v)
+	}
+	if mgr.DegradedClusters() != nil {
+		t.Error("expected no degraded clusters after recovery")
+	}
+}
+
+func TestCreateHTTPClientBadCACert(t *testing.T) {
+	credStore, err := credentials.NewStore(&config.Config{Clusters: map[string]config.ClusterConfig{}}, "test-secret")
+	if err != nil {
+		t.Fatalf("cred store: %v", err)
+	}
+	credStore.SetCACert("cluster-a", []byte("not a pem"))
+
+	mgr := NewVerifierManager(&config.Config{Clusters: map[string]config.ClusterConfig{}}, credStore)
+	if _, err := mgr.createHTTPClient("cluster-a", config.ClusterConfig{}); err == nil {
+		t.Fatal("expected error for unparsable CA cert")
+	}
+}
+
+func TestCreateHTTPClientTransportSelection(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, r.Header.Get("Authorization"))
+	}))
+	defer srv.Close()
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+
+	credStore, err := credentials.NewStore(&config.Config{Clusters: map[string]config.ClusterConfig{}}, "test-secret")
+	if err != nil {
+		t.Fatalf("cred store: %v", err)
+	}
+	credStore.SetCACert("cluster-a", caPEM)
+	credStore.SetToken("cluster-a", "stored-token")
+
+	mgr := NewVerifierManager(&config.Config{Clusters: map[string]config.ClusterConfig{}}, credStore)
+
+	client, err := mgr.createHTTPClient("cluster-a", config.ClusterConfig{})
+	if err != nil {
+		t.Fatalf("createHTTPClient() error: %v", err)
+	}
+	if got := doAndRead(t, client, srv.URL); got != "Bearer stored-token" {
+		t.Errorf("Authorization = %q, want stored token", got)
+	}
+
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("file-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	credStore.ClearToken("cluster-a")
+
+	client, err = mgr.createHTTPClient("cluster-a", config.ClusterConfig{TokenPath: tokenFile})
+	if err != nil {
+		t.Fatalf("createHTTPClient() error: %v", err)
+	}
+	if got := doAndRead(t, client, srv.URL); got != "Bearer file-token" {
+		t.Errorf("Authorization = %q, want file token", got)
+	}
+}
+
+func TestCreateHTTPClientTestHook(t *testing.T) {
+	injected := &http.Client{}
+	mgr := NewVerifierManager(&config.Config{Clusters: map[string]config.ClusterConfig{}}, nil)
+	mgr.testHTTPClients = map[string]*http.Client{"cluster-a": injected}
+
+	got, err := mgr.createHTTPClient("cluster-a", config.ClusterConfig{})
+	if err != nil || got != injected {
+		t.Fatalf("createHTTPClient() = %v, %v; want injected client", got, err)
+	}
+}
+
+func TestCreateHTTPClientFromTokenPathCACert(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, r.Header.Get("Authorization"))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	caFile := dir + "/ca.pem"
+	tokenFile := dir + "/token"
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(caFile, caPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenFile, []byte("mounted-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewVerifierManager(&config.Config{Clusters: map[string]config.ClusterConfig{}}, nil)
+
+	client, err := mgr.createHTTPClientFromTokenPath(config.ClusterConfig{CACert: caFile, TokenPath: tokenFile})
+	if err != nil {
+		t.Fatalf("createHTTPClientFromTokenPath() error: %v", err)
+	}
+	if got := doAndRead(t, client, srv.URL); got != "Bearer mounted-token" {
+		t.Errorf("Authorization = %q, want mounted token", got)
+	}
+
+	if _, err := mgr.createHTTPClientFromTokenPath(config.ClusterConfig{CACert: dir + "/missing.pem"}); err == nil {
+		t.Error("expected error for missing CA cert file")
+	}
+
+	badCA := dir + "/bad.pem"
+	if err := os.WriteFile(badCA, []byte("not a pem"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.createHTTPClientFromTokenPath(config.ClusterConfig{CACert: badCA}); err == nil {
+		t.Error("expected error for unparsable CA cert")
+	}
+}
+
+func TestTokenRoundTripperMissingFile(t *testing.T) {
+	client := &http.Client{Transport: &tokenRoundTripper{
+		transport: http.DefaultTransport,
+		tokenPath: t.TempDir() + "/absent",
+	}}
+	if _, err := client.Get("http://127.0.0.1:1/"); err == nil {
+		t.Fatal("expected error when token file is missing")
+	}
+}
+
+func TestGetOrCreateVerifierDiscoveryFallback(t *testing.T) {
+	key := newSigningKey(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer good-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			fmt.Fprintf(w, `{"issuer":"https://a.example.com","jwks_uri":"https://%s/openid/v1/jwks"}`, r.Host)
+		case "/openid/v1/jwks":
+			fmt.Fprint(w, jwksJSON(t, key, "kid-1"))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	caFile := dir + "/ca.pem"
+	tokenFile := dir + "/token"
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(caFile, caPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenFile, []byte("good-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	clusterCfg := config.ClusterConfig{
+		Issuer:    "https://a.example.com",
+		APIServer: srv.URL,
+		CACert:    caFile,
+		TokenPath: tokenFile,
+	}
+	cfg := &config.Config{Clusters: map[string]config.ClusterConfig{"cluster-a": clusterCfg}}
+
+	credStore, err := credentials.NewStore(&config.Config{Clusters: map[string]config.ClusterConfig{}}, "test-secret")
+	if err != nil {
+		t.Fatalf("cred store: %v", err)
+	}
+	credStore.SetCACert("cluster-a", caPEM)
+	credStore.SetToken("cluster-a", "stale-token")
+
+	mgr := NewVerifierManager(cfg, credStore)
+
+	if _, err := mgr.getOrCreateVerifier(context.Background(), "cluster-a", clusterCfg); err != nil {
+		t.Fatalf("getOrCreateVerifier() error: %v", err)
+	}
+
+	creds, _ := credStore.Get("cluster-a")
+	if creds.Token != "" {
+		t.Errorf("expected stale token cleared, got %q", creds.Token)
+	}
+	if mgr.kidToCluster["kid-1"] != "cluster-a" {
+		t.Error("expected kid-1 pre-fetched for cluster-a")
+	}
+}
+
+func TestGetOrCreateVerifierFallbackClientError(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer failing.Close()
+
+	clusterCfg := config.ClusterConfig{
+		Issuer:    "https://a.example.com",
+		APIServer: failing.URL,
+		CACert:    t.TempDir() + "/missing.pem",
+		TokenPath: "/nonexistent/token",
+	}
+	cfg := &config.Config{Clusters: map[string]config.ClusterConfig{"cluster-a": clusterCfg}}
+
+	mgr := NewVerifierManager(cfg, nil)
+	mgr.testHTTPClients = map[string]*http.Client{"cluster-a": failing.Client()}
+
+	if _, err := mgr.getOrCreateVerifier(context.Background(), "cluster-a", clusterCfg); err == nil {
+		t.Fatal("expected error when both primary and fallback discovery fail")
+	}
+	if mgr.DegradedClusters()["cluster-a"] == "" {
+		t.Error("expected cluster-a to be degraded")
+	}
+}
+
+func doAndRead(t *testing.T, client *http.Client, url string) string {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return string(body)
+}
+
+func gaugeValue(t *testing.T, gauge *prometheus.GaugeVec, cluster string) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := gauge.WithLabelValues(cluster).Write(&m); err != nil {
+		t.Fatalf("reading gauge: %v", err)
+	}
+	return m.GetGauge().GetValue()
 }
