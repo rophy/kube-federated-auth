@@ -138,7 +138,7 @@ func (h *TokenReviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Step 1: Detect cluster via JWKS (local, no token leakage)
 	cluster, claims, err := h.detectCluster(r.Context(), tr.Spec.Token)
 	if err != nil {
-		*r = *r.WithContext(mw.SetErrorMessage(r.Context(), "token not valid for any configured cluster"))
+		*r = *r.WithContext(mw.SetErrorMessage(r.Context(), err.Error()))
 		if h.isDegraded() {
 			h.writeError(w, http.StatusInternalServerError, "token not valid for any configured cluster")
 		} else {
@@ -301,13 +301,22 @@ func extractIdentity(claims *oidc.Claims) (namespace, serviceAccount string) {
 // This is done locally without sending the token anywhere.
 // Returns the cluster name and claims from the successful verification.
 func (h *TokenReviewHandler) detectCluster(ctx context.Context, token string) (string, *oidc.Claims, error) {
+	const sigErr = "failed to verify id token signature"
+	var notable []string
 	for clusterName := range h.config.Clusters {
 		claims, err := h.verifier.Verify(ctx, clusterName, token)
 		if err == nil {
 			return clusterName, claims, nil
 		}
+		if !strings.Contains(err.Error(), sigErr) {
+			notable = append(notable, clusterName+": "+err.Error())
+		}
 	}
-	return "", nil, fmt.Errorf("token signature does not match any configured cluster")
+	msg := "token not valid for any configured cluster"
+	if len(notable) > 0 {
+		msg += " (" + strings.Join(notable, "; ") + ")"
+	}
+	return "", nil, fmt.Errorf("%s", msg)
 }
 
 // forwardTokenReview sends the TokenReview request to the detected cluster's API server.
