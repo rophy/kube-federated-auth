@@ -44,6 +44,18 @@ func (m *mockVerifier) Verify(ctx context.Context, clusterName, rawToken string)
 	return nil, fmt.Errorf("token not valid for cluster %s", clusterName)
 }
 
+// errorMockVerifier returns per-cluster errors for testing detectCluster error filtering.
+type errorMockVerifier struct {
+	errors map[string]error
+}
+
+func (m *errorMockVerifier) Verify(ctx context.Context, clusterName, rawToken string) (*oidc.Claims, error) {
+	if err, ok := m.errors[clusterName]; ok {
+		return nil, err
+	}
+	return nil, fmt.Errorf("no error configured for cluster %s", clusterName)
+}
+
 func TestHealth(t *testing.T) {
 	handler := NewHealthHandler("v1.2.3", nil)
 
@@ -664,6 +676,63 @@ func TestDetectCluster(t *testing.T) {
 		_, _, err := h.detectCluster(context.Background(), "unknown-token")
 		if err == nil {
 			t.Error("expected error for unmatched token")
+		}
+	})
+
+	t.Run("signature mismatch errors are suppressed", func(t *testing.T) {
+		sigVerifier := &errorMockVerifier{
+			errors: map[string]error{
+				"cluster-a": fmt.Errorf("failed to verify id token signature"),
+				"cluster-b": fmt.Errorf("failed to verify id token signature"),
+			},
+		}
+		h2 := NewTokenReviewHandler(sigVerifier, cfg, nil, nil)
+		_, _, err := h2.detectCluster(context.Background(), "any-token")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		errMsg := err.Error()
+		if errMsg != "token not valid for any configured cluster" {
+			t.Errorf("error = %q, want no parenthetical detail for signature mismatches", errMsg)
+		}
+	})
+
+	t.Run("notable errors are included in detail", func(t *testing.T) {
+		expVerifier := &errorMockVerifier{
+			errors: map[string]error{
+				"cluster-a": fmt.Errorf("oidc: token is expired"),
+				"cluster-b": fmt.Errorf("oidc: token is expired"),
+			},
+		}
+		h2 := NewTokenReviewHandler(expVerifier, cfg, nil, nil)
+		_, _, err := h2.detectCluster(context.Background(), "any-token")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "cluster-a: oidc: token is expired") && !strings.Contains(errMsg, "cluster-b: oidc: token is expired") {
+			t.Errorf("error = %q, want notable errors in parenthetical detail", errMsg)
+		}
+	})
+
+	t.Run("mixed errors only include notable ones", func(t *testing.T) {
+		mixedVerifier := &errorMockVerifier{
+			errors: map[string]error{
+				"cluster-a": fmt.Errorf("failed to verify id token signature"),
+				"cluster-b": fmt.Errorf("oidc: token is expired"),
+			},
+		}
+		h2 := NewTokenReviewHandler(mixedVerifier, cfg, nil, nil)
+		_, _, err := h2.detectCluster(context.Background(), "any-token")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "cluster-b: oidc: token is expired") {
+			t.Errorf("error = %q, want cluster-b notable error in detail", errMsg)
+		}
+		if strings.Contains(errMsg, "cluster-a") {
+			t.Errorf("error = %q, should not contain cluster-a signature mismatch", errMsg)
 		}
 	})
 }
