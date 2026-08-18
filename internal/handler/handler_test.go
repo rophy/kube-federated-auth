@@ -710,8 +710,13 @@ func TestDetectCluster(t *testing.T) {
 			t.Fatal("expected error")
 		}
 		errMsg := err.Error()
-		if !strings.Contains(errMsg, "cluster-a: oidc: token is expired") && !strings.Contains(errMsg, "cluster-b: oidc: token is expired") {
-			t.Errorf("error = %q, want notable errors in parenthetical detail", errMsg)
+		for _, want := range []string{
+			"cluster-a: oidc: token is expired",
+			"cluster-b: oidc: token is expired",
+		} {
+			if !strings.Contains(errMsg, want) {
+				t.Errorf("error = %q, want %q in parenthetical detail", errMsg, want)
+			}
 		}
 	})
 
