@@ -76,6 +76,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: kube-federated-auth
+  namespace: kube-federated-auth
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -103,6 +104,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: kube-federated-auth
+  namespace: kube-federated-auth
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
@@ -112,6 +114,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: kube-federated-auth
+  namespace: kube-federated-auth
 subjects:
 - kind: ServiceAccount
   name: kube-federated-auth
@@ -124,6 +127,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: kube-federated-auth
+  namespace: kube-federated-auth
 spec:
   selector:
     app: kube-federated-auth
@@ -134,6 +138,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kube-federated-auth
+  namespace: kube-federated-auth
 spec:
   selector:
     matchLabels:
@@ -186,6 +191,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: kube-federated-auth-reader
+  namespace: kube-federated-auth
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -213,6 +219,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: token-creator
+  namespace: kube-federated-auth
 rules:
 - apiGroups: [""]
   resources: ["serviceaccounts/token"]
@@ -222,6 +229,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: kube-federated-auth-reader-token-creator
+  namespace: kube-federated-auth
 subjects:
 - kind: ServiceAccount
   name: kube-federated-auth-reader

@@ -62,11 +62,30 @@ PROMPT_EOF
     [ -f "$RESULT_FILE" ]
     grep -qi 'authenticated.*true' "$RESULT_FILE"
 
-    # Independent verification
+    # Independent verification: read AI's authorized_clients config to find the caller SA
+    local config_yaml
+    config_yaml=$(kubectl get configmap kube-federated-auth -n kube-federated-auth --context kind-cluster-a -o jsonpath='{.data.clusters\.yaml}')
+    echo "# AI config: $config_yaml"
+
+    # Parse first authorized_clients entry (format: cluster/namespace/sa)
+    local client_entry
+    client_entry=$(echo "$config_yaml" | grep -A1 'authorized_clients' | grep -oP '"[^"]+"' | head -1 | tr -d '"')
+    [ -n "$client_entry" ]
+    echo "# Using authorized client: $client_entry"
+
+    local caller_ns caller_sa
+    caller_ns=$(echo "$client_entry" | cut -d/ -f2)
+    caller_sa=$(echo "$client_entry" | cut -d/ -f3)
+
+    # If wildcard, use the server's own SA as caller
+    if [ "$caller_sa" = "*" ]; then
+        caller_sa="kube-federated-auth"
+    fi
+
     local token
     token=$(kubectl create token default --context kind-cluster-b -n default --duration=10m)
     local caller_token
-    caller_token=$(kubectl create token kube-federated-auth --context kind-cluster-a -n kube-federated-auth --duration=10m)
+    caller_token=$(kubectl create token "$caller_sa" --context kind-cluster-a -n "$caller_ns" --duration=10m)
 
     # Verify authorized_clients is enforced: request without caller token should fail
     local no_auth_result
