@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	kfadocs "github.com/rophy/kube-federated-auth"
 	"github.com/rophy/kube-federated-auth/internal/config"
 	"github.com/rophy/kube-federated-auth/internal/credentials"
 	"github.com/rophy/kube-federated-auth/internal/server"
@@ -21,13 +25,27 @@ var Version = "dev"
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	configPath := flag.String("config", getEnv("CONFIG_PATH", "config/clusters.yaml"), "path to cluster config file")
-	port := flag.String("port", getEnv("PORT", "8080"), "server port")
-	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "kube-federated-auth"), "name of credential secret")
+	flag.Usage = func() {
+		fmt.Fprint(os.Stdout, kfadocs.README)
+	}
+
+	configPath := flag.String("config", getEnv("CONFIG_PATH", "config/clusters.yaml"), "path to cluster config file (env: CONFIG_PATH)")
+	port := flag.String("port", getEnv("PORT", "8080"), "server port (env: PORT)")
+	secretName := flag.String("secret-name", getEnv("SECRET_NAME", "kube-federated-auth"), "name of credential secret (env: SECRET_NAME)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "Config file not found: %s\n\n", *configPath)
+			fmt.Fprintf(os.Stderr, "Usage:\n")
+			fmt.Fprintf(os.Stderr, "  kube-federated-auth [flags]\n\n")
+			fmt.Fprintf(os.Stderr, "Flags:\n")
+			flag.CommandLine.SetOutput(os.Stderr)
+			flag.PrintDefaults()
+			fmt.Fprintf(os.Stderr, "\nRun with -help for full documentation.\n")
+			os.Exit(1)
+		}
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
