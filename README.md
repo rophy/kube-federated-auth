@@ -239,11 +239,12 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 ```
 
-#### Bootstrap token
+#### Bootstrap credentials
 
-Create on the remote cluster and load into the server cluster as a Secret. The token file must not contain a trailing newline.
+Create a bootstrap token and extract the CA certificate from the remote cluster, then load both into the server cluster.
 
 ```bash
+# Bootstrap token (no trailing newline)
 printf '%s' "$(kubectl create token kube-federated-auth-reader \
   -n kube-federated-auth --duration=8760h \
   --context kind-cluster-b)" > bootstrap-token-cluster-b
@@ -251,9 +252,15 @@ printf '%s' "$(kubectl create token kube-federated-auth-reader \
 kubectl create secret generic kube-federated-auth-bootstrap \
   --from-file=cluster-b=bootstrap-token-cluster-b \
   --context kind-cluster-a -n kube-federated-auth
-```
 
-Set `token_path` and `ca_cert` in the config to match mount paths (e.g. `/etc/kfa/tokens/cluster-b`, `/etc/kfa/ca-certs/cluster-b-ca.crt`).
+# CA certificate
+kubectl get configmap kube-root-ca.crt -n kube-system --context kind-cluster-b \
+  -o jsonpath='{.data.ca\.crt}' > cluster-b-ca.crt
+
+kubectl create configmap kube-federated-auth-certs \
+  --from-file=cluster-b-ca.crt=cluster-b-ca.crt \
+  --context kind-cluster-a -n kube-federated-auth
+```
 
 ## Configuration
 
@@ -273,6 +280,7 @@ renewal:
   token_duration: "168h"  # Requested token TTL (7 days)
   renew_before: "48h"     # Renew when <48h remaining
 
+# Clusters can share the same issuer — detection uses JWKS signing keys, not issuer URL.
 clusters:
   # EKS cluster (public OIDC endpoint, no credentials needed)
   eks-prod:
@@ -285,7 +293,8 @@ clusters:
     api_server: "https://kubernetes.default.svc.cluster.local"
     ca_cert: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
-  # Remote cluster with private OIDC (requires credentials)
+  # Remote cluster with private OIDC (requires credentials).
+  # Same issuer as cluster-a is fine — each cluster has unique JWKS signing keys.
   cluster-b:
     issuer: "https://kubernetes.default.svc.cluster.local"
     api_server: "https://cluster-b.example.com:6443"
