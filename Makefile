@@ -1,4 +1,4 @@
-.PHONY: build image kind deploy test-unit test-e2e test test-perf destroy clean help
+.PHONY: build image kind deploy test-unit test-e2e test-llm test test-perf destroy clean help
 
 .DEFAULT_GOAL := help
 
