@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
@@ -517,5 +519,220 @@ func TestRenewMountedToken(t *testing.T) {
 	}
 	if creds.source != tokenMounted {
 		t.Errorf("expected source tokenMounted after renewal")
+	}
+}
+
+type countingVerifier struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countingVerifier) InvalidateVerifier(string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+}
+
+func (c *countingVerifier) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+func TestClearToken(t *testing.T) {
+	t.Run("clears existing token", func(t *testing.T) {
+		store := newTestStore()
+		store.credentials["cluster-b"] = &Credentials{Token: "tok", CACert: []byte("ca"), source: tokenPersisted}
+
+		store.ClearToken("cluster-b")
+
+		creds, _ := store.Get("cluster-b")
+		if creds.Token != "" {
+			t.Errorf("token = %q, want empty", creds.Token)
+		}
+		if creds.source != tokenMounted {
+			t.Errorf("source = %d, want tokenMounted", creds.source)
+		}
+		if string(creds.CACert) != "ca" {
+			t.Error("CA cert should be preserved")
+		}
+	})
+	t.Run("unknown cluster is no-op", func(t *testing.T) {
+		store := newTestStore()
+		store.ClearToken("missing")
+		if _, ok := store.Get("missing"); ok {
+			t.Error("expected no credentials to be created")
+		}
+	})
+}
+
+func TestSetMetrics(t *testing.T) {
+	store := newTestStore()
+	counter := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_renewal_total"}, []string{"cluster", "result"})
+	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_expiry_seconds"}, []string{"cluster"})
+
+	store.SetMetrics(counter, gauge)
+
+	if store.renewalTotal != counter || store.expirySeconds != gauge {
+		t.Error("expected metrics to be set")
+	}
+}
+
+func TestTryRenew_RecordsMetricsAndInvalidatesVerifier(t *testing.T) {
+	renewedToken := makeJWT("system:serviceaccount:kube-federated-auth:reader", time.Now().Add(168*time.Hour))
+	storedToken := makeJWT("system:serviceaccount:kube-federated-auth:reader", time.Now().Add(time.Minute))
+
+	cfg := defaultConfig()
+	cfg.Renewal = &config.RenewalSettings{RenewBefore: 8760 * time.Hour}
+
+	store := newTestStoreWithConfig(cfg)
+	store.credentials["cluster-b"] = &Credentials{Token: storedToken, CACert: []byte("ca"), source: tokenPersisted}
+	store.newClient = fakeClientFactory(setupFakeClient(t, renewedToken))
+
+	store.SetMetrics(
+		prometheus.NewCounterVec(prometheus.CounterOpts{Name: "renewal_total"}, []string{"cluster", "result"}),
+		prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "expiry_seconds"}, []string{"cluster"}),
+	)
+
+	verifier := &countingVerifier{}
+	store.verifier = verifier
+
+	store.tryRenew(context.Background())
+
+	got, _ := store.Get("cluster-b")
+	if got.Token != renewedToken {
+		t.Error("expected token to be renewed")
+	}
+	if verifier.count() != 1 {
+		t.Errorf("verifier calls = %d, want 1", verifier.count())
+	}
+}
+
+func TestTryRenew_RecordsFailureMetric(t *testing.T) {
+	storedToken := makeJWT("system:serviceaccount:kube-federated-auth:reader", time.Now().Add(time.Minute))
+
+	cfg := defaultConfig()
+	cfg.Renewal = &config.RenewalSettings{RenewBefore: 8760 * time.Hour}
+
+	store := newTestStoreWithConfig(cfg)
+	store.credentials["cluster-b"] = &Credentials{Token: storedToken, CACert: []byte("ca"), source: tokenPersisted}
+	store.newClient = fakeClientFactory(setupFailingClient(t))
+
+	store.SetMetrics(prometheus.NewCounterVec(prometheus.CounterOpts{Name: "renewal_total"}, []string{"cluster", "result"}), nil)
+
+	store.tryRenew(context.Background())
+
+	got, _ := store.Get("cluster-b")
+	if got.Token != storedToken {
+		t.Error("expected token to be unchanged after failed renewal")
+	}
+}
+
+func TestTryRenew_SkipsClusterWithoutToken(t *testing.T) {
+	cfg := defaultConfig()
+	store := newTestStoreWithConfig(cfg)
+	store.credentials["cluster-b"] = &Credentials{Token: "", source: tokenPersisted}
+
+	verifier := &countingVerifier{}
+	store.verifier = verifier
+
+	store.tryRenew(context.Background())
+
+	if verifier.count() != 0 {
+		t.Errorf("verifier calls = %d, want 0", verifier.count())
+	}
+}
+
+func TestTryRenew_PersistsToSecretAfterRenewal(t *testing.T) {
+	renewedToken := makeJWT("system:serviceaccount:kube-federated-auth:reader", time.Now().Add(168*time.Hour))
+	storedToken := makeJWT("system:serviceaccount:kube-federated-auth:reader", time.Now().Add(time.Minute))
+
+	cfg := defaultConfig()
+	cfg.Renewal = &config.RenewalSettings{RenewBefore: 8760 * time.Hour}
+
+	store := newTestStoreWithConfig(cfg)
+	store.credentials["cluster-b"] = &Credentials{Token: storedToken, CACert: []byte("ca"), source: tokenPersisted}
+	store.newClient = fakeClientFactory(setupFakeClient(t, renewedToken))
+	store.client = kubefake.NewSimpleClientset()
+	store.namespace = "test-ns"
+	store.secretName = "creds"
+
+	store.tryRenew(context.Background())
+
+	secret, err := store.client.CoreV1().Secrets("test-ns").Get(context.Background(), "creds", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("expected secret to be persisted: %v", err)
+	}
+	if string(secret.Data["cluster-b-token"]) != renewedToken {
+		t.Error("expected renewed token in secret")
+	}
+}
+
+func TestStart_RenewLoopRunsAndStopsOnCancel(t *testing.T) {
+	renewedToken := makeJWT("system:serviceaccount:kube-federated-auth:reader", time.Now().Add(168*time.Hour))
+	storedToken := makeJWT("system:serviceaccount:kube-federated-auth:reader", time.Now().Add(time.Minute))
+
+	cfg := defaultConfig()
+	cfg.Renewal = &config.RenewalSettings{Interval: 5 * time.Millisecond, RenewBefore: 8760 * time.Hour}
+
+	store := newTestStoreWithConfig(cfg)
+	store.credentials["cluster-b"] = &Credentials{Token: storedToken, CACert: []byte("ca"), source: tokenPersisted}
+	store.newClient = fakeClientFactory(setupFakeClient(t, renewedToken))
+
+	verifier := &countingVerifier{}
+	ctx, cancel := context.WithCancel(context.Background())
+	store.Start(ctx, verifier)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for verifier.count() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("renewal loop did not tick, calls = %d", verifier.count())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+	stopped := verifier.count()
+	time.Sleep(50 * time.Millisecond)
+	if verifier.count() != stopped {
+		t.Errorf("loop kept running after cancel: %d -> %d", stopped, verifier.count())
+	}
+}
+
+func TestCreateClient(t *testing.T) {
+	store := newTestStore()
+	cfg := config.ClusterConfig{APIServer: "https://10.0.0.1:6443"}
+
+	t.Run("with credentials", func(t *testing.T) {
+		ca := generateCACert(time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+		client, err := store.createClient(cfg, &Credentials{Token: "tok", CACert: ca})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if client == nil {
+			t.Error("expected client")
+		}
+	})
+	t.Run("nil credentials", func(t *testing.T) {
+		client, err := store.createClient(cfg, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if client == nil {
+			t.Error("expected client")
+		}
+	})
+	t.Run("invalid CA data", func(t *testing.T) {
+		_, err := store.createClient(cfg, &Credentials{Token: "tok", CACert: []byte("not-a-cert")})
+		if err == nil {
+			t.Error("expected error for invalid CA data")
+		}
+	})
+}
+
+func TestDetectNamespace(t *testing.T) {
+	if ns := detectNamespace(); ns != "kube-federated-auth" {
+		t.Errorf("namespace = %q, want %q", ns, "kube-federated-auth")
 	}
 }
