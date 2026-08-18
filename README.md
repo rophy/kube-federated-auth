@@ -467,10 +467,11 @@ The caller's token was verified and identity extracted, but it doesn't match any
 
 ### `token not valid for any configured cluster` (for the reviewed token)
 
-The client workload's token (in `spec.token`) couldn't be matched to any configured cluster. Check:
+The client workload's token (in `spec.token`) couldn't be matched to any configured cluster. When the cause is something other than a signature mismatch, the error includes per-cluster detail in parentheses.
 
-- The client workload's cluster is listed in `clusters:` config
-- The `issuer` matches the token's `iss` claim (run `kubectl get --raw /.well-known/openid-configuration` on the client's cluster to find the issuer)
+- The client workload's cluster is not listed in `clusters:` config
+- The `issuer` doesn't match the token's `iss` claim (run `kubectl get --raw /.well-known/openid-configuration` on the client's cluster)
+- The token is expired
 
 ### `401 Authorization header required`
 
