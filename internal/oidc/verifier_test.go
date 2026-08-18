@@ -415,7 +415,7 @@ func newOIDCTestServer(t *testing.T, key *rsa.PrivateKey, kid string) *httptest.
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
-			fmt.Fprintf(w, `{"issuer":"https://a.example.com","jwks_uri":"https://%s/openid/v1/jwks"}`, r.Host)
+			_, _ = fmt.Fprintf(w, `{"issuer":"https://a.example.com","jwks_uri":"https://%s/openid/v1/jwks"}`, r.Host)
 		case "/openid/v1/jwks":
 			fmt.Fprint(w, jwksJSON(t, key, kid))
 		default:
@@ -678,7 +678,12 @@ func TestTokenRoundTripperMissingFile(t *testing.T) {
 		transport: http.DefaultTransport,
 		tokenPath: t.TempDir() + "/absent",
 	}}
-	if _, err := client.Get("http://127.0.0.1:1/"); err == nil {
+	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:1/", nil)
+	resp, err := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil {
 		t.Fatal("expected error when token file is missing")
 	}
 }
@@ -692,7 +697,7 @@ func TestGetOrCreateVerifierDiscoveryFallback(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
-			fmt.Fprintf(w, `{"issuer":"https://a.example.com","jwks_uri":"https://%s/openid/v1/jwks"}`, r.Host)
+			_, _ = fmt.Fprintf(w, `{"issuer":"https://a.example.com","jwks_uri":"https://%s/openid/v1/jwks"}`, r.Host)
 		case "/openid/v1/jwks":
 			fmt.Fprint(w, jwksJSON(t, key, "kid-1"))
 		default:
