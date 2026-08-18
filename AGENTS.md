@@ -68,8 +68,8 @@ docs/
 
 CI handles the full release pipeline — never create GitHub releases manually.
 
-1. Tag the commit on main: `git tag v<major>.<minor>.<patch>`
-2. Push the tag: `git push origin v<major>.<minor>.<patch>`
+1. Tag the commit on main: `git tag <major>.<minor>.<patch>`
+2. Push the tag: `git push origin <major>.<minor>.<patch>`
 3. CI runs test, build, then publish (pushes image to `ghcr.io/rophy/kube-federated-auth` and creates the GitHub release)
 
 Follow [semver](https://semver.org/): bump minor for new features, patch for fixes.
