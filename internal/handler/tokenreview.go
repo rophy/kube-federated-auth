@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -154,7 +155,7 @@ func (h *TokenReviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	*r = *r.WithContext(mw.SetClusterName(r.Context(), cluster))
 
 	// Step 1.5: Check cache before forwarding
-	cacheKey := cache.HashKey(cluster, tr.Spec.Token)
+	cacheKey := tokenReviewCacheKey(cluster, &tr)
 	if c, ok := h.caches[cluster]; ok {
 		if cached, hit := c.Get(cacheKey); hit {
 			slog.DebugContext(r.Context(), "cache hit", "cluster", cluster)
@@ -320,6 +321,16 @@ func (h *TokenReviewHandler) detectCluster(ctx context.Context, token string) (s
 }
 
 // forwardTokenReview sends the TokenReview request to the detected cluster's API server.
+// tokenReviewCacheKey builds the cache and singleflight key. spec.audiences is
+// part of the key because the upstream result depends on it. Audiences are
+// sorted so order does not matter, and JSON-encoded so values cannot collide.
+func tokenReviewCacheKey(cluster string, tr *authv1.TokenReview) string {
+	audiences := slices.Clone(tr.Spec.Audiences)
+	slices.Sort(audiences)
+	audJSON, _ := json.Marshal(audiences)
+	return cache.HashKey(cluster, tr.Spec.Token, string(audJSON))
+}
+
 func (h *TokenReviewHandler) forwardTokenReview(ctx context.Context, clusterName string, tr *authv1.TokenReview) (*authv1.TokenReview, error) {
 	clusterCfg, ok := h.config.Clusters[clusterName]
 	if !ok {
