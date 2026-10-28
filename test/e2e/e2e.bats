@@ -214,3 +214,22 @@ setup() {
     echo "# HTTP status: $http_code"
     [[ "$http_code" == "401" ]]
 }
+
+@test "TokenReview forwards spec.audiences to the remote cluster" {
+    # Separate tokens per request so the cache does not affect this test
+    local token_match token_mismatch
+    token_match=$(get_cluster_b_token_aud "service-a")
+    token_mismatch=$(get_cluster_b_token_aud "service-a")
+
+    # Matching audience: authenticated, status.audiences echoes the match
+    local result
+    result=$(token_review_aud "$token_match" '["service-a"]')
+    echo "# Matching audience response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated')" == "true" ]]
+    [[ "$(echo "$result" | jq -c '.status.audiences')" == '["service-a"]' ]]
+
+    # Mismatched audience: not authenticated (false or omitted)
+    result=$(token_review_aud "$token_mismatch" '["service-b"]')
+    echo "# Mismatched audience response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated == true')" == "false" ]]
+}

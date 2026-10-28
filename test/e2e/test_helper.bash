@@ -45,6 +45,25 @@ get_cluster_b_token() {
     kubectl --context "$KUBE_CONTEXT_B" -n "$NAMESPACE_B" create token kube-federated-auth-reader --duration=10m
 }
 
+# Create a short-lived token from cluster-b's reader SA with the given audience
+get_cluster_b_token_aud() {
+    local audience="$1"
+    kubectl --context "$KUBE_CONTEXT_B" -n "$NAMESPACE_B" create token kube-federated-auth-reader --duration=10m --audience "$audience"
+}
+
+# POST a TokenReview request with spec.audiences
+# Usage: token_review_aud <token> '["aud-1","aud-2"]'
+token_review_aud() {
+    local token="$1"
+    local audiences="$2"
+    local caller_token
+    caller_token=$(get_caller_token)
+    kexec curl -s -X POST "${SERVICE_URL}/apis/authentication.k8s.io/v1/tokenreviews" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${caller_token}" \
+        -d "{\"apiVersion\":\"authentication.k8s.io/v1\",\"kind\":\"TokenReview\",\"spec\":{\"token\":\"${token}\",\"audiences\":${audiences}}}"
+}
+
 # Create a token from a SA that is NOT in the authorized_clients whitelist
 get_unauthorized_caller_token() {
     kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" create token default --duration=10m

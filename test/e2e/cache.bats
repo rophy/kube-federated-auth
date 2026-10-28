@@ -57,3 +57,59 @@ setup() {
 
     echo "$logs" | grep -q "cache=hit"
 }
+
+@test "TokenReview cache does not reuse authenticated result across audiences" {
+    local token
+    token=$(get_cluster_b_token_aud "service-a")
+
+    local result
+    result=$(token_review_aud "$token" '["service-a"]')
+    echo "# service-a response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated')" == "true" ]]
+
+    # Same token, different audience — must not get the cached result
+    result=$(token_review_aud "$token" '["service-b"]')
+    echo "# service-b response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated == true')" == "false" ]]
+}
+
+@test "TokenReview cache does not reuse negative result across audiences" {
+    local token
+    token=$(get_cluster_b_token_aud "service-a")
+
+    local result
+    result=$(token_review_aud "$token" '["service-b"]')
+    echo "# service-b response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated == true')" == "false" ]]
+
+    # Same token, matching audience — must not get the cached denial
+    result=$(token_review_aud "$token" '["service-a"]')
+    echo "# service-a response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated')" == "true" ]]
+}
+
+@test "TokenReview cache key ignores audience order" {
+    local token
+    token=$(get_cluster_b_token_aud "service-a")
+
+    local since
+    since=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    local result
+    result=$(token_review_aud "$token" '["service-a","service-b"]')
+    echo "# First response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated')" == "true" ]]
+
+    result=$(token_review_aud "$token" '["service-b","service-a"]')
+    echo "# Second response: $result"
+    [[ "$(echo "$result" | jq -r '.status.authenticated')" == "true" ]]
+
+    # Allow logs to flush
+    sleep 1
+
+    local logs
+    logs=$(server_logs_since "$since")
+    echo "# Server logs: $logs"
+
+    echo "$logs" | grep -q "cache=hit"
+}
