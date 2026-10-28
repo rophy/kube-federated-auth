@@ -1018,3 +1018,99 @@ func TestNegativeCaching_UnauthenticatedResultsCached(t *testing.T) {
 		t.Errorf("second request: expected still 1 upstream call (cached), got %d", callCount.Load())
 	}
 }
+
+// newFakeClientWithAudience creates a fake K8s client that authenticates a token
+// only when spec.audiences contains tokenAud, mimicking API server audience checks.
+func newFakeClientWithAudience(callCount *atomic.Int32, tokenAud string) *fakekube.Clientset {
+	client := fakekube.NewSimpleClientset()
+	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		callCount.Add(1)
+		req := action.(k8stesting.CreateAction).GetObject().(*authv1.TokenReview)
+		result := &authv1.TokenReview{}
+		for _, a := range req.Spec.Audiences {
+			if a == tokenAud {
+				result.Status.Authenticated = true
+				result.Status.Audiences = []string{tokenAud}
+				result.Status.User.Username = "system:serviceaccount:default:test-sa"
+			}
+		}
+		return true, result, nil
+	})
+	return client
+}
+
+func newAudienceTestHandler(t *testing.T, client *fakekube.Clientset) *TokenReviewHandler {
+	t.Helper()
+	cfg := &config.Config{
+		Cache: &config.CacheSettings{TTL: 60, NegativeTTL: 30, MaxEntries: 1000},
+		Clusters: map[string]config.ClusterConfig{
+			"cluster-a": {Issuer: "https://a.example.com"},
+		},
+	}
+	verifier := &mockVerifier{
+		claims: map[string]*oidc.Claims{
+			"test-token": {Subject: "system:serviceaccount:default:test-sa"},
+		},
+	}
+	h := NewTokenReviewHandler(verifier, cfg, nil, nil)
+	h.clients["cluster-a"] = client
+	return h
+}
+
+func doAudienceReview(t *testing.T, h *TokenReviewHandler, audiences string) authv1.TokenReview {
+	t.Helper()
+	body := `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{"token":"test-token","audiences":` + audiences + `}}`
+	req := httptest.NewRequest(http.MethodPost, "/apis/authentication.k8s.io/v1/tokenreviews", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	var resp authv1.TokenReview
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	return resp
+}
+
+func TestCache_KeyIncludesAudiences(t *testing.T) {
+	t.Run("positive entry not reused for other audience", func(t *testing.T) {
+		var callCount atomic.Int32
+		h := newAudienceTestHandler(t, newFakeClientWithAudience(&callCount, "service-a"))
+
+		if resp := doAudienceReview(t, h, `["service-a"]`); !resp.Status.Authenticated {
+			t.Fatal("service-a: expected authenticated=true")
+		}
+		if resp := doAudienceReview(t, h, `["service-b"]`); resp.Status.Authenticated {
+			t.Error("service-b: expected authenticated=false, got cached result for service-a")
+		}
+		if n := callCount.Load(); n != 2 {
+			t.Errorf("expected 2 upstream calls, got %d", n)
+		}
+	})
+
+	t.Run("negative entry not reused for other audience", func(t *testing.T) {
+		var callCount atomic.Int32
+		h := newAudienceTestHandler(t, newFakeClientWithAudience(&callCount, "service-a"))
+
+		if resp := doAudienceReview(t, h, `["service-b"]`); resp.Status.Authenticated {
+			t.Fatal("service-b: expected authenticated=false")
+		}
+		if resp := doAudienceReview(t, h, `["service-a"]`); !resp.Status.Authenticated {
+			t.Error("service-a: expected authenticated=true, got cached denial for service-b")
+		}
+		if n := callCount.Load(); n != 2 {
+			t.Errorf("expected 2 upstream calls, got %d", n)
+		}
+	})
+
+	t.Run("audience order does not affect key", func(t *testing.T) {
+		var callCount atomic.Int32
+		h := newAudienceTestHandler(t, newFakeClientWithAudience(&callCount, "service-a"))
+
+		doAudienceReview(t, h, `["service-a","service-b"]`)
+		if resp := doAudienceReview(t, h, `["service-b","service-a"]`); !resp.Status.Authenticated {
+			t.Error("expected authenticated=true")
+		}
+		if n := callCount.Load(); n != 1 {
+			t.Errorf("expected 1 upstream call (cache hit), got %d", n)
+		}
+	})
+}
